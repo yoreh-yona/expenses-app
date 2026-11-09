@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '1.3.2';
+const VERSION = '1.4.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -589,7 +589,7 @@ $('fSave').onclick = async () => {
   const removed = ash ? [...F.removed, ...F.receipts.filter(r => !r.isNew).map(r => r.id)] : F.removed;
   for (const id of removed) await DB.del('files', id);
   await DB.put('expenses', rec);
-  await loadExpenses();
+  await loadExpenses(); syncNag();
   const msg = rec.period !== currentPeriod() ? `נשמר – בדוח ${periodLabel(rec.period)}` : (!ash && !rec.receipts.length ? 'נשמר (ללא קבלה)' : 'נשמר ✓');
   closeForm(); listKey = rec.period; renderExpenses(); toast(msg);
 };
@@ -597,7 +597,7 @@ $('fDelete').onclick = async () => {
   if (!confirm('למחוק את ההוצאה?')) return;
   const e = EXP.find(x => x.id === F.id);
   for (const id of e.receipts || []) await DB.del('files', id);
-  await DB.del('expenses', e.id); await loadExpenses(); closeForm(); renderExpenses(); toast('נמחק');
+  await DB.del('expenses', e.id); await loadExpenses(); syncNag(); closeForm(); renderExpenses(); toast('נמחק');
 };
 
 /* ---------------- report ---------------- */
@@ -642,7 +642,7 @@ async function renderReport() {
   $('repStatus').innerHTML = `<div class="muted">${fmtDate(r.start)} – ${fmtDate(r.end)} · הגשה עד ${fmtDate(r.end)}</div>` +
     (sent ? `<div class="banner ok" style="margin:8px 0 0">✓ נשלח ב-${new Date(sent.sentAt).toLocaleDateString('he-IL')} (${money(sent.total)})
       <a href="#" id="unsend">ביטול סימון</a></div>` : '');
-  const un = $('unsend'); if (un) un.onclick = async ev => { ev.preventDefault(); delete S.sentReports[repKey]; await saveSettingsObj(); renderReport(); };
+  const un = $('unsend'); if (un) un.onclick = async ev => { ev.preventDefault(); delete S.sentReports[repKey]; await saveSettingsObj(); syncNag(); renderReport(); };
   const sig = await DB.get('files', 'signature');
   const tpl = await DB.get('files', 'template');
   const checks = reportChecks(items);
@@ -833,7 +833,7 @@ function renderSend() {
   $('markSent').onclick = async () => {
     const items = reportItems(OUT.key);
     S.sentReports[OUT.key] = {sentAt: Date.now(), total: items.reduce((s, e) => s + Number(e.amount), 0), count: items.length};
-    await saveSettingsObj(); if (!closeLayer('review')) hideReview(); toast('הדוח סומן כנשלח ✓');
+    await saveSettingsObj(); syncNag(true); if (!closeLayer('review')) hideReview(); toast('הדוח סומן כנשלח ✓');
   };
 }
 
@@ -841,7 +841,7 @@ function renderSend() {
 async function renderSettings() {
   $('sName').value = S.name; $('sRole').value = S.role; $('sManager').value = S.manager; $('sCompany').value = S.company;
   $('sAcctEmail').value = S.acctEmail; $('sAcctName').value = S.acctName; $('sNotes').value = S.notes;
-  renderCats(); renderTiers();
+  renderCats(); renderTiers(); renderNag();
   await renderSigTpl();
   try {
     const est = await navigator.storage.estimate(); const p = await navigator.storage.persisted?.();
@@ -965,7 +965,7 @@ $('btnBackup').onclick = async () => {
     readSettingsForm();
     const files = [];
     for (const f of await DB.all('files')) files.push({id: f.id, type: f.type, name: f.name, data: b64(await f.blob.arrayBuffer()), orig: f.orig ? b64(await f.orig.arrayBuffer()) : null, edit: f.edit || null});
-    const data = {app: 'expenses-app', version: VERSION, exportedAt: new Date().toISOString(), settings: S, expenses: await DB.all('expenses'), files};
+    const data = {app: 'expenses-app', version: VERSION, exportedAt: new Date().toISOString(), settings: {...S, ghToken: undefined}, expenses: await DB.all('expenses'), files};
     const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
     const name = `גיבוי_הוצאות_${todayISO()}.json`;
     const file = new File([blob], name, {type: 'application/json'});
@@ -1001,6 +1001,96 @@ $('btnIcs').onclick = () => {
   downloadBlob(new Blob([ics], {type: 'text/calendar'}), 'expenses-reminder.ics');
 };
 
+/* ---------------- push reminders (Web Push sent by a scheduled GitHub Action) ---------------- */
+const REPO = (() => {
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/), r = location.pathname.split('/').filter(Boolean)[0];
+  return m && r ? {owner: m[1], repo: r} : {owner: 'yoreh-yona', repo: 'expenses-app'};
+})();
+const b64u = buf => { let s = ''; new Uint8Array(buf).forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const unb64u = s => { s = s.replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const b = atob(s); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+async function gh(path, method, body) {
+  const r = await fetch(`https://api.github.com/repos/${REPO.owner}/${REPO.repo}${path}`, {
+    method, headers: {Authorization: 'Bearer ' + S.ghToken, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json'},
+    body: body ? JSON.stringify(body) : undefined
+  });
+  return r;
+}
+async function ghVar(name, value) {
+  let r = await gh(`/actions/variables/${name}`, 'PATCH', {name, value});
+  if (r.status === 404) r = await gh('/actions/variables', 'POST', {name, value});
+  if (!r.ok) throw new Error(r.status === 401 ? 'המפתח לא תקין או שפג תוקפו' : r.status === 403 ? 'למפתח אין הרשאת Variables' : `GitHub ${r.status}`);
+}
+async function vapidKeys() {
+  const have = (await DB.get('kv', 'vapid'))?.v; if (have) return have;
+  const kp = await crypto.subtle.generateKey({name: 'ECDSA', namedCurve: 'P-256'}, true, ['sign', 'verify']);
+  const k = {pub: b64u(await crypto.subtle.exportKey('raw', kp.publicKey)), priv: (await crypto.subtle.exportKey('jwk', kp.privateKey)).d};
+  await DB.put('kv', {k: 'vapid', v: k}); return k;
+}
+const pendingPeriods = () => [...new Set(EXP.filter(e => !isAshal(e)).map(e => e.period))].filter(p => !S.sentReports[p]).sort();
+let _nagT;
+function syncNag(now) {
+  if (!S.nag?.on || !S.ghToken) return;
+  clearTimeout(_nagT);
+  _nagT = setTimeout(async () => {
+    try { await ghVar('NAG_STATE', JSON.stringify({pending: pendingPeriods(), updated: new Date().toISOString()})); S.nag.dirty = false; S.nag.synced = Date.now(); }
+    catch (e) { console.warn('nag sync', e); S.nag.dirty = true; S.nag.err = e.message; }
+    await saveSettingsObj(); renderNag();
+  }, now ? 0 : 1500);
+}
+async function enableNag(silent) {
+  const tok = $('nagToken').value.trim() || S.ghToken;
+  if (!tok) throw new Error('יש להדביק מפתח GitHub');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('הדפדפן לא תומך בהתראות. פתח את האפליקציה מהאייקון במסך הבית.');
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') throw new Error('ההרשאה להתראות נחסמה – אפשר אותה בהגדרות האפליקציה בטלפון');
+  S.ghToken = tok;
+  const reg = await navigator.serviceWorker.ready, k = await vapidKeys();
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && sub.options?.applicationServerKey && b64u(sub.options.applicationServerKey) !== k.pub) { await sub.unsubscribe(); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: unb64u(k.pub)});
+  const interval = Number($('nagInterval').value) || 2;
+  await ghVar('NAG_CONFIG', JSON.stringify({sub: sub.toJSON(), vapidPublic: k.pub, vapidPrivate: k.priv, interval, startHour: 9, endHour: 21}));
+  S.nag = {on: true, interval, at: Date.now()};
+  await saveSettingsObj(); $('nagToken').value = ''; syncNag(true);
+  if (!silent) toast('ההתראות הופעלו ✓');
+}
+async function disableNag() {
+  try { if (S.ghToken) await ghVar('NAG_CONFIG', 'null'); } catch (e) { console.warn(e); }
+  try { const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch {}
+  S.nag = {on: false}; await saveSettingsObj(); renderNag(); toast('ההתראות כובו');
+}
+function renderNag() {
+  if (!$('nagStatus')) return;
+  const n = S.nag || {}, perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
+  $('nagInterval').value = String(n.interval || 2);
+  const pend = pendingPeriods();
+  $('nagStatus').innerHTML = n.on
+    ? `<div class="banner ok" style="margin:8px 0">🔔 פעיל · כל ${n.interval === 1 ? 'שעה' : n.interval + ' שעות'} מ-09:00 עד 21:00` +
+      `${pend.length ? `<br>ממתין להגשה: ${pend.map(periodLabel).join(', ')}` : '<br>אין דוח ממתין'}` +
+      `${n.dirty ? `<br>⚠️ סנכרון אחרון נכשל (${esc(n.err || '')}) – ינוסה שוב` : ''}${perm !== 'granted' ? '<br>⚠️ ההרשאה להתראות בוטלה בטלפון' : ''}</div>`
+    : '<div class="muted" style="margin:8px 0">כבוי</div>';
+  $('nagSetup').classList.toggle('hidden', !!n.on);
+  $('btnNagOn').textContent = n.on ? 'עדכון' : '🔔 הפעלת התראות';
+  $('btnNagTest').disabled = $('btnNagOff').disabled = !n.on;
+}
+$('btnNagOn').onclick = async () => {
+  spin(true, 'מפעיל התראות…');
+  try { await enableNag(); } catch (e) { console.error(e); alert(e.message); }
+  spin(false); renderNag();
+};
+$('nagInterval').onchange = async () => { if (S.nag?.on) { try { await enableNag(true); toast('התדירות עודכנה'); } catch (e) { alert(e.message); } renderNag(); } };
+$('btnNagOff').onclick = () => { if (confirm('לכבות את התראות ההגשה?')) disableNag(); };
+$('btnNagTest').onclick = async () => {
+  spin(true, 'שולח בדיקה…');
+  try {
+    const r = await gh('/actions/workflows/nag.yml/dispatches', 'POST', {ref: 'main', inputs: {test: true}});
+    if (r.status !== 204) throw new Error(r.status === 403 ? 'למפתח אין הרשאת Actions (Read and write)' : `GitHub ${r.status}`);
+    toast('נשלח – ההתראה תגיע תוך כדקה', 4000);
+  } catch (e) { alert(e.message); }
+  spin(false);
+};
+navigator.serviceWorker?.addEventListener('message', ev => { if (ev.data?.go === 'report') goTab('report'); });
+
 /* ---------------- boot ---------------- */
 (async function boot() {
   try {
@@ -1008,6 +1098,8 @@ $('btnIcs').onclick = () => {
     await DB.open(); await loadSettings(); await loadExpenses();
     try { await navigator.storage?.persist?.(); } catch {}
     renderExpenses();
+    if (S.nag?.on) syncNag(true);
+    if (location.hash === '#report') { history.replaceState(history.state, '', location.pathname); goTab('report'); }
     if (!S.name) setTimeout(() => toast('ברוך הבא! התחל בהגדרות: שם, מייל הנה"ח וחתימה', 4500), 400);
   } catch (err) { console.error(err); document.body.insertAdjacentHTML('afterbegin', `<div class="banner">שגיאה בטעינת האחסון: ${esc(err.message)}</div>`); }
   if ('serviceWorker' in navigator && location.protocol === 'https:') {

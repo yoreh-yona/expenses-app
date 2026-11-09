@@ -204,6 +204,29 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
       <button class="btn sec block" id="btnAshalReset">שחזור תעריפי הנוהל</button>
     </div>
     <div class="card">
+      <h2>התראות הגשה 🔔</h2>
+      <div class="muted">התראה לטלפון מה-25 לחודש בשעה 09:00, בכל כמה שעות עד 21:00 – ובימים שאחרי – עד שהדוח מסומן "נשלח". רק לחודש שיש בו הוצאות.</div>
+      <div id="nagStatus"></div>
+      <label>תדירות</label>
+      <select id="nagInterval"><option value="1">כל שעה</option><option value="2">כל שעתיים</option><option value="3">כל 3 שעות</option></select>
+      <div id="nagSetup">
+        <label>מפתח GitHub (הגדרה חד-פעמית)</label>
+        <input id="nagToken" type="password" dir="ltr" autocomplete="off" placeholder="github_pat_…">
+        <details style="margin-top:8px"><summary class="muted">איך יוצרים מפתח?</summary>
+          <ol class="muted" style="padding-inline-start:18px;line-height:1.7;margin:6px 0">
+            <li>פתח את <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens/new</a></li>
+            <li>Token name: <code>expenses-app</code>, Expiration: הארוך ביותר</li>
+            <li>Repository access: <b>Only select repositories</b> ← <code>expenses-app</code></li>
+            <li>Permissions ← Repository: <b>Variables</b> = Read and write, <b>Actions</b> = Read and write</li>
+            <li>Generate token, העתק והדבק כאן</li>
+          </ol>
+          <div class="muted">המפתח נשמר רק בטלפון ומאפשר לאפליקציה לעדכן את שרת ההתראות (GitHub Actions) מתי להציק.</div>
+        </details>
+      </div>
+      <button class="btn block" id="btnNagOn">🔔 הפעלת התראות</button>
+      <div class="row" style="margin-top:8px"><button class="btn sec" id="btnNagTest">שליחת התראת בדיקה</button><button class="btn sec" id="btnNagOff">כיבוי</button></div>
+    </div>
+    <div class="card">
       <h2>גיבוי</h2>
       <div class="muted" id="storageInfo"></div>
       <div class="row" style="margin-top:8px">

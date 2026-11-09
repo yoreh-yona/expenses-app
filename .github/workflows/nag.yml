@@ -1,0 +1,38 @@
+name: Expense report reminder
+on:
+  schedule:
+    - cron: '5 * * * *'   # hourly; the script decides (Israel time, interval, report status)
+  workflow_dispatch:
+    inputs:
+      test:
+        description: Send a test notification now
+        type: boolean
+        default: true
+permissions:
+  actions: write
+  contents: read
+jobs:
+  nag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/nag
+      - id: decide
+        run: node .github/nag/nag.js --decide
+        env:
+          NAG_CONFIG: ${{ vars.NAG_CONFIG }}
+          NAG_STATE: ${{ vars.NAG_STATE }}
+          TEST: ${{ inputs.test }}
+      - if: steps.decide.outputs.send == 'true'
+        run: npm i --no-save --no-audit --no-fund web-push@3 && node nag.js
+        working-directory: .github/nag
+        env:
+          NAG_CONFIG: ${{ vars.NAG_CONFIG }}
+          NAG_STATE: ${{ vars.NAG_STATE }}
+          TEST: ${{ inputs.test }}
+      - name: Keep the schedule from being disabled after 60 idle days
+        if: github.event_name == 'schedule' && github.run_number % 168 == 0
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/nag.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
