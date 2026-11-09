@@ -1,6 +1,6 @@
-const CACHE = 'expenses-v1.0.0';
-const ASSETS = ['./', 'index.html', 'app.js', 'manifest.json', 'template-default.docx',
-  'vendor/pizzip.min.js', 'vendor/docxtemplater.min.js', 'vendor/pdf-lib.min.js', 'icons/icon-192.png', 'icons/icon-512.png'];
+const CACHE = 'expenses-v1.1.0';
+const ASSETS = ['./', 'index.html', 'app.js', 'manifest.json', 'xlsx-fill.js',
+  'vendor/pizzip.min.js', 'vendor/exceljs.min.js', 'vendor/pdf-lib.min.js', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));

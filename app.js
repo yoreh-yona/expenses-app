@@ -1,18 +1,18 @@
 'use strict';
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
+const ASHAL_NAME = 'א.ש.ל';
+const SETTINGS_VERSION = 2;
+// categories = expense columns of the accounting Excel form (replaced from the uploaded file itself)
+const FORM_CATEGORIES = ['ארוחות עובדים', 'ארוחות עסקיות', 'דלק', 'ציוד רכב', 'ציוד סלולארי', 'נסיעות וחניונים', 'משרדיות', 'כיבוד', 'שונות'];
 const DEFAULT_SETTINGS = {
-  name: '', empId: '', dept: '', company: '', acctEmail: '', acctName: 'הנהלת חשבונות', notes: '',
-  categories: [
-    {name: 'דלק', ashal: false}, {name: 'חניה', ashal: false}, {name: 'כבישי אגרה', ashal: false},
-    {name: 'תחבורה ציבורית / מונית', ashal: false}, {name: 'ארוחות וכיבוד', ashal: false},
-    {name: 'ציוד וחומרים', ashal: false}, {name: 'טלפון ותקשורת', ashal: false},
-    {name: 'לינה', ashal: false}, {name: 'א.ש.ל', ashal: true}, {name: 'אחר', ashal: false}
-  ],
-  ashalMode: 'tiers', ashalRate: 0,
-  ashalTiers: [{from: 4, amount: 0}, {from: 8, amount: 0}],
+  v: SETTINGS_VERSION,
+  name: '', role: '', company: '', manager: '', acctEmail: '', acctName: 'הנהלת חשבונות', notes: '',
+  categories: [...FORM_CATEGORIES.map(name => ({name, ashal: false})), {name: ASHAL_NAME, ashal: true}],
+  // A.SH.L policy: up to 9h ₪55, up to 12h ₪100, above 12h ₪150 (reported in ProperTime, not in the Excel form)
+  ashalTiers: [{upTo: 9, amount: 55}, {upTo: 12, amount: 100}, {upTo: null, amount: 150}],
   sentReports: {} // periodKey -> {sentAt, total, count}
 };
 
@@ -97,6 +97,12 @@ let EXP = [];      // expenses
 async function loadSettings() {
   const r = await DB.get('kv', 'settings');
   S = Object.assign(structuredClone(DEFAULT_SETTINGS), r ? r.v : {});
+  if ((S.v || 1) < SETTINGS_VERSION) { // v1 had free categories + hour tiers; move to the Excel form's columns and the policy rates
+    const d = structuredClone(DEFAULT_SETTINGS);
+    S.categories = d.categories; S.ashalTiers = d.ashalTiers; S.v = SETTINGS_VERSION;
+    delete S.empId; delete S.dept; delete S.ashalMode; delete S.ashalRate;
+    await saveSettingsObj();
+  }
 }
 async function saveSettingsObj() { await DB.put('kv', {k: 'settings', v: S}); }
 async function loadExpenses() { EXP = (await DB.all('expenses')).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt); }
@@ -104,11 +110,10 @@ const catByName = n => S.categories.find(c => c.name === n);
 const isAshal = e => !!(catByName(e.category)?.ashal || e.ashal);
 
 function ashalAmount(hours) {
-  hours = Number(hours) || 0;
-  if (S.ashalMode === 'hourly') return Math.round(hours * (Number(S.ashalRate) || 0) * 100) / 100;
-  let amt = 0;
-  [...S.ashalTiers].sort((a, b) => a.from - b.from).forEach(t => { if (hours >= Number(t.from)) amt = Number(t.amount) || 0; });
-  return amt;
+  hours = Number(hours) || 0; if (!(hours > 0)) return 0;
+  const tiers = [...S.ashalTiers].sort((a, b) => (a.upTo ?? Infinity) - (b.upTo ?? Infinity));
+  const t = tiers.find(t => hours <= (t.upTo ?? Infinity)) || tiers[tiers.length - 1];
+  return t ? Number(t.amount) || 0 : 0;
 }
 
 /* ---------------- navigation ---------------- */
@@ -214,12 +219,12 @@ function onCatChange() {
   $('fAmountWrap').classList.toggle('hidden', ash);
   $('fRcptWrap').classList.toggle('hidden', ash);
   if (ash) updAshal();
+  $('fDesc').placeholder = $('fCat').value === 'ארוחות עסקיות' ? 'עם מי הייתה הפגישה ובאיזה נושא / פרויקט' : 'לדוגמה: פז – נסיעה לאתר';
 }
 function updAshal() {
   const a = ashalAmount($('fHours').value);
   $('fAshalAmt').value = num2(a);
-  const noRate = S.ashalMode === 'hourly' ? !(Number(S.ashalRate) > 0) : !S.ashalTiers.some(t => Number(t.amount) > 0);
-  $('fAshalNote').textContent = noRate ? '⚠️ לא הוגדר תעריף א.ש.ל – יש להגדיר בהגדרות.' : 'א.ש.ל – לא נדרשת קבלה.';
+  $('fAshalNote').textContent = 'א.ש.ל – ללא קבלה. לא נכנס לדוח האקסל; מרוכז בלשונית "דוח" לדיווח בפרופר טיים.';
 }
 $('fCat').onchange = onCatChange;
 $('fHours').oninput = updAshal;
@@ -331,9 +336,12 @@ $('fDelete').onclick = async () => {
 };
 
 /* ---------------- report ---------------- */
-function reportItems(key) {
-  return EXP.filter(e => e.period === key).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt)
+function reportItems(key) { // items that go into the Excel form (A.SH.L is reported separately in ProperTime)
+  return EXP.filter(e => e.period === key && !isAshal(e)).sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt)
     .map((e, i) => ({...e, index: i + 1}));
+}
+function ashalItems(key) {
+  return EXP.filter(e => e.period === key && isAshal(e)).sort((a, b) => a.date.localeCompare(b.date));
 }
 function byCategory(items) {
   const m = new Map();
@@ -342,13 +350,23 @@ function byCategory(items) {
 }
 function reportChecks(items) {
   const out = [];
-  if (!items.length) out.push(['bad', 'אין הוצאות בתקופה זו']);
-  const miss = items.filter(e => !isAshal(e) && !e.receipts?.length);
+  if (!items.length) out.push(['bad', 'אין הוצאות לדוח בתקופה זו']);
+  const miss = items.filter(e => !e.receipts?.length);
   if (miss.length) out.push(['warn', `${miss.length} הוצאות ללא קבלה: ${miss.map(e => '#' + e.index).join(', ')}`]);
-  if (items.some(e => isAshal(e) && !(e.amount > 0))) out.push(['warn', 'יש א.ש.ל בסכום 0 – בדוק תעריף בהגדרות']);
+  const bm = items.filter(e => e.category === 'ארוחות עסקיות' && !e.description);
+  if (bm.length) out.push(['warn', `ארוחה עסקית בלי פרטי פגישה (עם מי ובאיזה פרויקט): ${bm.map(e => '#' + e.index).join(', ')}`]);
   if (!S.name) out.push(['bad', 'חסר שם עובד (הגדרות)']);
   if (!S.acctEmail) out.push(['bad', 'חסר מייל הנהלת חשבונות (הגדרות)']);
   return out;
+}
+function ashalHtml(key) {
+  const a = ashalItems(key); if (!a.length) return '';
+  const tot = a.reduce((s, e) => s + Number(e.amount), 0);
+  return `<div class="card"><h2>א.ש.ל – לדיווח בפרופר טיים</h2>
+    <div class="muted" style="margin-bottom:8px">לפי הנוהל א.ש.ל מדווח במערכת השעות ולא נכנס לדוח ההוצאות.</div>
+    <table class="rep"><thead><tr><th>תאריך</th><th>שעות</th><th>תיאור</th><th>סכום</th></tr></thead><tbody>
+    ${a.map(e => `<tr><td>${fmtDate(e.date)}</td><td>${e.hours}</td><td>${esc(e.description)}</td><td>${num2(e.amount)}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td colspan="3">סה"כ ${a.length} ימים</td><td>${num2(tot)}</td></tr></tfoot></table></div>`;
 }
 let repKey = null;
 async function renderReport() {
@@ -361,13 +379,17 @@ async function renderReport() {
       <a href="#" id="unsend">ביטול סימון</a></div>` : '');
   const un = $('unsend'); if (un) un.onclick = async ev => { ev.preventDefault(); delete S.sentReports[repKey]; await saveSettingsObj(); renderReport(); };
   const sig = await DB.get('files', 'signature');
-  const checks = reportChecks(items); if (!sig) checks.push(['bad', 'חסרה חתימה (הגדרות)']);
-  $('repChecks').innerHTML = checks.map(([lvl, t]) => `<div class="banner ${lvl === 'ok' ? 'ok' : ''}">${lvl === 'bad' ? '⛔' : '⚠️'} ${esc(t)}</div>`).join('');
+  const tpl = await DB.get('files', 'template');
+  const checks = reportChecks(items);
+  if (!sig) checks.push(['bad', 'חסרה חתימה (הגדרות)']);
+  if (!tpl) checks.push(['bad', 'חסר קובץ האקסל של הנהלת החשבונות (הגדרות ← תבנית הדוח)']);
+  $('repChecks').innerHTML = checks.map(([lvl, t]) => `<div class="banner">${lvl === 'bad' ? '⛔' : '⚠️'} ${esc(t)}</div>`).join('');
   const total = items.reduce((s, e) => s + Number(e.amount), 0);
-  $('repSummary').innerHTML = `<h2>סיכום – ${periodLabel(repKey)}</h2>` +
+  $('repSummary').innerHTML = `<h2>דוח הוצאות – ${periodLabel(repKey)}</h2>` +
     (items.length ? `<table class="rep"><thead><tr><th>סוג הוצאה</th><th>פריטים</th><th>סכום</th></tr></thead><tbody>` +
       byCategory(items).map(c => `<tr><td>${esc(c.name)}</td><td>${c.count}</td><td>${num2(c.sum)}</td></tr>`).join('') +
-      `</tbody><tfoot><tr><td>סה"כ</td><td>${items.length}</td><td>${num2(total)}</td></tr></tfoot></table>` : '<div class="empty">אין הוצאות</div>');
+      `</tbody><tfoot><tr><td>סה"כ</td><td>${items.length}</td><td>${num2(total)}</td></tr></tfoot></table>` : '<div class="empty">אין הוצאות לדוח</div>');
+  $('repAshal').innerHTML = ashalHtml(repKey);
   $('btnReview').disabled = checks.some(c => c[0] === 'bad');
 }
 $('repPeriod').onchange = () => { repKey = $('repPeriod').value; renderReport(); };
@@ -379,19 +401,23 @@ async function openReview() {
   const body = $('rvBody');
   body.innerHTML = `
   <div class="card">
-    <div class="muted">${esc(S.company)}</div>
-    <div style="font-weight:700;font-size:17px">דוח הוצאות אישיות – ${periodLabel(repKey)}</div>
-    <div class="muted">${fmtDate(r.start)} – ${fmtDate(r.end)} · ${esc(S.name)}${S.empId ? ' · עובד ' + esc(S.empId) : ''}</div>
+    <div style="font-weight:700;font-size:17px">דוח הוצאות עובדים – ${periodLabel(repKey)}</div>
+    <div class="muted">${esc(S.name)}${S.role ? ' · ' + esc(S.role) : ''}${S.company ? ' · ' + esc(S.company) : ''}${S.manager ? ' · מנהל מאשר: ' + esc(S.manager) : ''}</div>
+    <div class="muted">${fmtDate(r.start)} – ${fmtDate(r.end)}</div>
   </div>
   <div class="card" style="overflow-x:auto">
-    <table class="rep"><thead><tr><th>#</th><th>תאריך</th><th>סוג</th><th>תיאור</th><th>קבלה</th><th>סכום</th></tr></thead><tbody>
-    ${items.map(e => `<tr><td>${e.index}</td><td>${fmtDate(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.description)}${isAshal(e) ? ` (${e.hours} ש')` : ''}</td>
-      <td>${isAshal(e) ? '—' : (e.receipts?.length ? 'מצורפת' : '<b style="color:var(--bad)">חסרה</b>')}</td><td>${num2(e.amount)}</td></tr>`).join('')}
-    </tbody><tfoot><tr><td colspan="5">סה"כ</td><td>${num2(total)}</td></tr></tfoot></table>
+    <table class="rep"><thead><tr><th># חשבונית</th><th>תאריך</th><th>סוג</th><th>תיאור</th><th>סכום</th></tr></thead><tbody>
+    ${items.map(e => `<tr><td>${e.receipts?.length ? e.index : '<b style="color:var(--bad)">חסרה</b>'}</td><td>${fmtDate(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.description)}</td><td>${num2(e.amount)}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td colspan="4">סה"כ</td><td>${num2(total)}</td></tr></tfoot></table>
+    <div class="row" style="margin-top:6px">
+      <div><label>מקדמות (₪, אם יש)</label><input id="rvAdv" type="number" inputmode="decimal" placeholder="0"></div>
+      <div><label>הערות לדוח</label><input id="rvNotes" value="${esc(S.notes)}"></div>
+    </div>
   </div>
   <div class="card"><h2>קבלות מצורפות</h2><div class="gallery" id="rvGal"></div></div>
+  ${ashalHtml(repKey)}
   <div class="card">
-    <button class="btn sec block" id="rvDraft" style="margin-top:0">📄 פתיחת טיוטת Word (ללא חתימה)</button>
+    <button class="btn sec block" id="rvDraft" style="margin-top:0">📊 פתיחת טיוטת Excel (ללא חתימה)</button>
     <label style="display:flex;align-items:center;color:var(--ink);font-size:15px;margin-top:14px">
       <input type="checkbox" id="rvOk">עיינתי בדוח ואני מאשר/ת את נכונותו</label>
     <button class="btn ok block" id="rvSign" disabled>✍️ אישור, חתימה והכנה לשליחה</button>
@@ -405,7 +431,7 @@ async function openReview() {
   $('rvOk').onchange = () => $('rvSign').disabled = !$('rvOk').checked;
   $('rvDraft').onclick = async () => {
     spin(true, 'מכין טיוטה…');
-    try { const b = await buildDocx(repKey, false); downloadBlob(b, fileNames(repKey).draft); }
+    try { const b = await buildXlsx(repKey, false); downloadBlob(b, fileNames(repKey).draft); }
     catch (err) { console.error(err); alert('שגיאה ביצירת הדוח: ' + err.message); }
     spin(false);
   };
@@ -417,77 +443,34 @@ $('rvClose').onclick = () => { $('review').classList.remove('on'); renderReport(
 
 function fileNames(key) {
   const n = (S.name || 'עובד').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '_');
-  return {docx: `דוח_הוצאות_${n}_${key}.docx`, draft: `טיוטה_דוח_הוצאות_${key}.docx`, pdf: `קבלות_${n}_${key}.pdf`};
+  return {xlsx: `דוח_הוצאות_${n}_${key}.xlsx`, draft: `טיוטה_דוח_הוצאות_${key}.xlsx`, pdf: `קבלות_${n}_${key}.pdf`};
 }
 
-/* ----- DOCX ----- */
+/* ----- XLSX ----- */
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 async function getTemplate() {
   const t = await DB.get('files', 'template');
-  if (t) return await t.blob.arrayBuffer();
-  const r = await fetch('template-default.docx'); return await r.arrayBuffer();
+  if (!t) throw new Error('חסר קובץ האקסל של הנהלת החשבונות (הגדרות)');
+  return await t.blob.arrayBuffer();
 }
-async function buildDocx(key, signed) {
-  const items = reportItems(key), r = periodRange(key), total = items.reduce((s, e) => s + Number(e.amount), 0);
-  const zip = new PizZip(await getTemplate());
-  const doc = new window.docxtemplater(zip, {paragraphLoop: true, linebreaks: true, nullGetter: () => ''});
-  const today = fmtDate(todayISO());
-  doc.render({
-    companyName: S.company, employeeName: S.name, employeeId: S.empId, department: S.dept, notes: S.notes,
-    periodLabel: periodLabel(key), periodStart: fmtDate(r.start), periodEnd: fmtDate(r.end), reportDate: today,
-    signDate: signed ? today : '', total: num2(total), itemCount: String(items.length),
-    items: items.map(e => ({
-      index: String(e.index), date: fmtDate(e.date), category: e.category,
-      description: (e.description || '') + (isAshal(e) ? ` (${e.hours} שעות)` : ''),
-      receipt: isAshal(e) ? 'לא נדרש' : (e.receipts?.length ? 'מצורפת' : 'חסרה'), amount: num2(e.amount)
-    })),
-    byCategory: byCategory(items).map(c => ({name: c.name, count: String(c.count), sum: num2(c.sum)}))
-  });
-  const out = doc.getZip();
-  if (signed) {
-    const sig = await DB.get('files', 'signature');
-    if (!sig) throw new Error('חסרה חתימה');
-    const ok = await injectSignature(out, sig.blob);
-    if (!ok) throw new Error('לא נמצא מקום לחתימה בתבנית (תמונה עם Alt Text = SIGNATURE)');
-  }
-  return out.generate({type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', compression: 'DEFLATE'});
+async function sigPng() {
+  const sig = await DB.get('files', 'signature'); if (!sig) throw new Error('חסרה חתימה');
+  const bmp = await loadBitmap(sig.blob);
+  return {buffer: new Uint8Array(await sig.blob.arrayBuffer()), width: bmp.width, height: bmp.height};
 }
-async function injectSignature(zip, sigBlob) {
-  const path = 'word/document.xml';
-  let xml = zip.file(path).asText();
-  const m = /<wp:docPr\b[^>]*(?:descr|title|name)="SIGNATURE"[^>]*>/i.exec(xml);
-  if (!m) return false;
-  const dStart = xml.lastIndexOf('<w:drawing>', m.index), dEnd = xml.indexOf('</w:drawing>', m.index);
-  if (dStart < 0 || dEnd < 0) return false;
-  let seg = xml.slice(dStart, dEnd);
-  const em = /r:embed="([^"]+)"/.exec(seg); if (!em) return false;
-  const rels = zip.file('word/_rels/document.xml.rels').asText();
-  const tm = new RegExp(`<Relationship[^>]*Id="${em[1]}"[^>]*>`).exec(rels); if (!tm) return false;
-  let target = /Target="([^"]+)"/.exec(tm[0])[1];
-  const mediaPath = target.startsWith('/') ? target.slice(1) : 'word/' + target.replace(/^\.\//, '');
-  // convert signature to PNG of correct aspect
-  const bmp = await loadBitmap(sigBlob);
-  const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; c.getContext('2d').drawImage(bmp, 0, 0);
-  const png = await new Promise(res => c.toBlob(res, 'image/png'));
-  const pngBuf = new Uint8Array(await png.arrayBuffer());
-  if (/\.png$/i.test(mediaPath)) zip.file(mediaPath, pngBuf, {binary: true});
-  else { // non-png placeholder: add new png media and repoint relationship
-    const newT = 'media/signature_' + Date.now() + '.png';
-    zip.file('word/' + newT, pngBuf, {binary: true});
-    zip.file('word/_rels/document.xml.rels', rels.replace(tm[0], tm[0].replace(/Target="[^"]+"/, `Target="${newT}"`)));
-    let ct = zip.file('[Content_Types].xml').asText();
-    if (!/Extension="png"/i.test(ct)) ct = ct.replace('<Types ', '<Types ').replace(/(<Types[^>]*>)/, '$1<Default Extension="png" ContentType="image/png"/>');
-    zip.file('[Content_Types].xml', ct);
-  }
-  // keep width, fix height to signature aspect ratio
-  const ex = /<wp:extent cx="(\d+)" cy="(\d+)"\/>/.exec(seg);
-  if (ex) {
-    const cx = Number(ex[1]), cy = Math.round(cx * bmp.height / bmp.width);
-    seg = seg.replace(/<wp:extent cx="\d+" cy="\d+"\/>/, `<wp:extent cx="${cx}" cy="${cy}"/>`)
-             .replace(/<a:ext cx="\d+" cy="\d+"\/>/, `<a:ext cx="${cx}" cy="${cy}"/>`);
-    xml = xml.slice(0, dStart) + seg + xml.slice(dEnd);
-    zip.file(path, xml);
-  }
-  return true;
+async function buildXlsx(key, signed) {
+  const items = reportItems(key);
+  const [y, m] = key.split('-').map(Number);
+  const utc = iso => { const [a, b, c] = iso.split('-').map(Number); return new Date(Date.UTC(a, b - 1, c)); };
+  const adv = $('rvAdv') ? Number($('rvAdv').value) || 0 : 0;
+  const notes = $('rvNotes') ? $('rvNotes').value.trim() : S.notes;
+  const data = {
+    name: S.name, role: S.role, company: S.company, manager: S.manager, notes, advances: adv,
+    monthDate: new Date(Date.UTC(y, m - 1, 1)),
+    items: items.map(e => ({date: utc(e.date), description: e.description || '', category: e.category, amount: Number(e.amount), invoice: e.receipts?.length ? e.index : null}))
+  };
+  const {buffer} = await ExpenseXlsx.fill(ExcelJS, PizZip, await getTemplate(), data, signed ? await sigPng() : null);
+  return new Blob([buffer], {type: XLSX_MIME});
 }
 
 /* ----- receipts PDF ----- */
@@ -534,9 +517,9 @@ async function signAndPrepare() {
   spin(true, 'חותם ומכין קבצים…');
   try {
     const names = fileNames(repKey);
-    const docx = await buildDocx(repKey, true);
+    const xlsx = await buildXlsx(repKey, true);
     const pdf = await buildReceiptsPdf(repKey);
-    OUT = {key: repKey, files: [new File([docx], names.docx, {type: docx.type})]};
+    OUT = {key: repKey, files: [new File([xlsx], names.xlsx, {type: XLSX_MIME})]};
     if (pdf) OUT.files.push(new File([pdf], names.pdf, {type: 'application/pdf'}));
   } catch (err) { console.error(err); spin(false); alert('שגיאה: ' + err.message); return; }
   spin(false);
@@ -588,10 +571,9 @@ function renderSend() {
 
 /* ---------------- settings ---------------- */
 async function renderSettings() {
-  $('sName').value = S.name; $('sEmpId').value = S.empId; $('sDept').value = S.dept; $('sCompany').value = S.company;
+  $('sName').value = S.name; $('sRole').value = S.role; $('sManager').value = S.manager; $('sCompany').value = S.company;
   $('sAcctEmail').value = S.acctEmail; $('sAcctName').value = S.acctName; $('sNotes').value = S.notes;
-  $('sAshalMode').value = S.ashalMode; $('sAshalRate').value = S.ashalRate || '';
-  renderCats(); renderTiers(); onAshalMode();
+  renderCats(); renderTiers();
   await renderSigTpl();
   try {
     const est = await navigator.storage.estimate(); const p = await navigator.storage.persisted?.();
@@ -603,57 +585,53 @@ async function renderSigTpl() {
   const sig = await DB.get('files', 'signature');
   $('sigPreview').innerHTML = sig ? `<img src="${URL.createObjectURL(sig.blob)}">` : '<span class="muted">אין חתימה</span>';
   const t = await DB.get('files', 'template');
-  $('tplStatus').textContent = t ? `תבנית מותאמת: ${t.name || 'template.docx'}` : 'תבנית ברירת מחדל (עד שתעלה את התבנית של הנה"ח)';
+  $('tplStatus').innerHTML = t ? `✓ ${esc(t.name || 'template.xlsx')}` : '<b style="color:var(--bad)">לא הועלה קובץ.</b> העלה את קובץ האקסל של הנהלת החשבונות (דוח החזר הוצאות).';
+  $('btnTplReset').classList.toggle('hidden', !t);
 }
 function readSettingsForm() {
-  S.name = $('sName').value.trim(); S.empId = $('sEmpId').value.trim(); S.dept = $('sDept').value.trim(); S.company = $('sCompany').value.trim();
+  S.name = $('sName').value.trim(); S.role = $('sRole').value.trim(); S.manager = $('sManager').value.trim(); S.company = $('sCompany').value.trim();
   S.acctEmail = $('sAcctEmail').value.trim(); S.acctName = $('sAcctName').value.trim(); S.notes = $('sNotes').value.trim();
-  S.ashalMode = $('sAshalMode').value; S.ashalRate = Number($('sAshalRate').value) || 0;
-  S.categories = [...document.querySelectorAll('#catList .catrow')].map(r => ({name: r.querySelector('input[type=text]').value.trim(), ashal: r.querySelector('input[type=checkbox]').checked})).filter(c => c.name);
-  S.ashalTiers = [...document.querySelectorAll('#tierList .catrow')].map(r => { const [a, b] = r.querySelectorAll('input'); return {from: Number(a.value) || 0, amount: Number(b.value) || 0}; });
+  const rows = [...document.querySelectorAll('#tierList .catrow')];
+  if (rows.length) S.ashalTiers = rows.map(r => { const [a, b] = r.querySelectorAll('input'); return {upTo: a.value === '' ? null : Number(a.value), amount: Number(b.value) || 0}; });
 }
 function renderCats() {
-  $('catList').innerHTML = S.categories.map((c, i) => `<div class="catrow"><input type="text" value="${esc(c.name)}">
-    <label style="margin:0;display:flex;align-items:center;white-space:nowrap;font-size:12px"><input type="checkbox" ${c.ashal ? 'checked' : ''}>א.ש.ל</label>
-    <button class="sm" data-i="${i}">✕</button></div>`).join('');
-  $('catList').querySelectorAll('.sm').forEach(b => b.onclick = () => { readSettingsForm(); S.categories.splice(b.dataset.i, 1); renderCats(); saveSettingsObj(); });
+  $('catList').innerHTML = S.categories.map(c => `<span class="tag" style="font-size:13px;padding:4px 10px;margin:3px">${esc(c.name)}${c.ashal ? ' (פרופר טיים)' : ''}</span>`).join('');
 }
 function renderTiers() {
-  $('tierList').innerHTML = S.ashalTiers.map((t, i) => `<div class="catrow"><input type="number" inputmode="decimal" value="${t.from}" placeholder="משעה">
-    <input type="number" inputmode="decimal" value="${t.amount || ''}" placeholder="₪"><button class="sm" data-i="${i}">✕</button></div>`).join('');
-  $('tierList').querySelectorAll('.sm').forEach(b => b.onclick = () => { readSettingsForm(); S.ashalTiers.splice(b.dataset.i, 1); renderTiers(); saveSettingsObj(); });
+  $('tierList').innerHTML = S.ashalTiers.map(t => `<div class="catrow"><span class="muted" style="white-space:nowrap">עד</span>
+    <input type="number" inputmode="decimal" value="${t.upTo ?? ''}" placeholder="ללא הגבלה"><span class="muted" style="white-space:nowrap">שעות ←</span>
+    <input type="number" inputmode="decimal" value="${t.amount || ''}" placeholder="₪"></div>`).join('');
 }
-function onAshalMode() { const h = $('sAshalMode').value === 'hourly'; $('ashalHourly').classList.toggle('hidden', !h); $('ashalTiers').classList.toggle('hidden', h); }
-$('sAshalMode').onchange = onAshalMode;
 let _asT;
 $('view-settings').addEventListener('input', ev => {
   if (ev.target.type === 'file') return;
   clearTimeout(_asT); _asT = setTimeout(() => { readSettingsForm(); saveSettingsObj(); }, 500);
 });
 $('view-settings').addEventListener('change', ev => { if (ev.target.type !== 'file') { readSettingsForm(); saveSettingsObj(); } });
-$('btnAddCat').onclick = () => { readSettingsForm(); S.categories.push({name: '', ashal: false}); renderCats(); $('catList').lastChild.querySelector('input').focus(); };
-$('btnAddTier').onclick = () => { readSettingsForm(); S.ashalTiers.push({from: 0, amount: 0}); renderTiers(); };
+$('btnAshalReset').onclick = () => { S.ashalTiers = structuredClone(DEFAULT_SETTINGS.ashalTiers); renderTiers(); saveSettingsObj(); toast('תעריפי הנוהל שוחזרו'); };
 $('btnSaveSettings').onclick = async () => {
   readSettingsForm();
   if (S.acctEmail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(S.acctEmail)) return toast('כתובת מייל לא תקינה');
   await saveSettingsObj(); toast('ההגדרות נשמרו ✓');
 };
 
-// template
+// template (accounting's Excel form)
 $('btnTplUpload').onclick = () => $('tplFile').click();
 $('tplFile').onchange = async ev => {
   const f = ev.target.files[0]; ev.target.value = ''; if (!f) return;
+  spin(true, 'בודק את הקובץ…');
   try {
-    const zip = new PizZip(await f.arrayBuffer());
-    const xml = zip.file('word/document.xml').asText();
-    new window.docxtemplater(zip, {paragraphLoop: true, linebreaks: true}); // validates tags
-    await DB.put('files', {id: 'template', blob: f, type: f.type, name: f.name});
-    const hasSig = /(descr|title|name)="SIGNATURE"/i.test(xml);
-    const hasTags = /\{[#\/]?\w+\}/.test(xml.replace(/<[^>]+>/g, ''));
-    renderSigTpl(); toast(`התבנית נשמרה${hasTags ? '' : ' – ⚠️ לא נמצאו שדות {…}'}${hasSig ? '' : ' – ⚠️ אין מקום לחתימה'}`, 5000);
-  } catch (err) { console.error(err); alert('התבנית לא תקינה: ' + (err.properties?.errors?.map(e => e.properties.explanation).join('\n') || err.message)); }
+    const L = await ExpenseXlsx.inspect(ExcelJS, await f.arrayBuffer());
+    await DB.put('files', {id: 'template', blob: f, type: XLSX_MIME, name: f.name});
+    readSettingsForm();
+    S.categories = [...L.categories.map(c => ({name: c.name, ashal: false})), {name: ASHAL_NAME, ashal: true}];
+    await saveSettingsObj(); renderCats(); renderSigTpl();
+    const rows = L.lastData - L.firstData + 1;
+    toast(`✓ הקובץ נשמר: ${L.categories.length} סוגי הוצאות, ${rows} שורות${L.signature ? ', מקום לחתימה' : ' – ⚠️ לא נמצא מקום לחתימה'}`, 5000);
+  } catch (err) { console.error(err); alert('הקובץ לא זוהה כטופס דוח ההוצאות: ' + err.message); }
+  spin(false);
 };
-$('btnTplReset').onclick = async () => { await DB.del('files', 'template'); renderSigTpl(); toast('חזרה לתבנית ברירת המחדל'); };
+$('btnTplReset').onclick = async () => { if (!confirm('להסיר את קובץ האקסל?')) return; await DB.del('files', 'template'); renderSigTpl(); };
 
 // signature: upload (with background removal) or draw
 $('btnSigUpload').onclick = () => $('sigFile').click();

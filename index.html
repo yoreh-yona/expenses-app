@@ -125,6 +125,7 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
     </div>
     <div id="repChecks"></div>
     <div class="card" id="repSummary"></div>
+    <div id="repAshal"></div>
     <button class="btn block" id="btnReview">עיון בדוח ואישור ←</button>
   </section>
 
@@ -132,12 +133,12 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
   <section class="view" id="view-settings">
     <div class="card">
       <h2>פרטי עובד</h2>
-      <label>שם מלא</label><input id="sName">
+      <label>שם</label><input id="sName">
       <div class="row">
-        <div><label>מס' עובד</label><input id="sEmpId"></div>
-        <div><label>מחלקה</label><input id="sDept"></div>
+        <div><label>תפקיד</label><input id="sRole"></div>
+        <div><label>חברה</label><input id="sCompany"></div>
       </div>
-      <label>שם החברה (לכותרת הדוח)</label><input id="sCompany">
+      <label>מנהל מאשר</label><input id="sManager">
     </div>
     <div class="card">
       <h2>שליחה להנהלת חשבונות</h2>
@@ -156,43 +157,25 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
       <div class="muted" style="margin-top:6px">בתמונה של חתימה על דף לבן הרקע יוסר אוטומטית.</div>
     </div>
     <div class="card">
+      <h2>קובץ הדוח של הנהלת החשבונות</h2>
+      <div id="tplStatus" class="muted"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sec" id="btnTplUpload">העלאת קובץ Excel</button>
+        <button class="btn sec" id="btnTplReset">הסרה</button>
+      </div>
+      <input type="file" id="tplFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+      <div class="muted" style="margin-top:8px">האפליקציה ממלאת את הקובץ המקורי: פרטי עובד, חודש, שורת הוצאה לכל קבלה בעמודת הסוג שלה, מס' חשבונית, הערות וחתימת עובד. העיצוב והנוסחאות נשמרים.</div>
+    </div>
+    <div class="card">
       <h2>סוגי הוצאות</h2>
-      <div class="muted" style="margin-bottom:8px">סמן ✓ א.ש.ל לסוג שמחושב לפי שעות ולא דורש קבלה.</div>
+      <div class="muted" style="margin-bottom:8px">לפי העמודות בקובץ האקסל (מתעדכן אוטומטית בהעלאת הקובץ).</div>
       <div id="catList"></div>
-      <button class="btn sec block" id="btnAddCat">+ הוסף סוג הוצאה</button>
     </div>
     <div class="card">
       <h2>תעריף א.ש.ל</h2>
-      <label>שיטת חישוב</label>
-      <select id="sAshalMode">
-        <option value="tiers">מדרגות לפי שעות</option>
-        <option value="hourly">תעריף לשעה</option>
-      </select>
-      <div id="ashalHourly"><label>תעריף לשעה (₪)</label><input id="sAshalRate" type="number" inputmode="decimal"></div>
-      <div id="ashalTiers">
-        <div class="muted" style="margin:8px 0">משעה (כולל) ← סכום ליום. המדרגה הגבוהה שמתאימה נבחרת.</div>
-        <div id="tierList"></div>
-        <button class="btn sec block" id="btnAddTier">+ הוסף מדרגה</button>
-      </div>
-    </div>
-    <div class="card">
-      <h2>תבנית הדוח (Word)</h2>
-      <div id="tplStatus" class="muted"></div>
-      <div class="row" style="margin-top:8px">
-        <button class="btn sec" id="btnTplUpload">העלאת תבנית</button>
-        <button class="btn sec" id="btnTplReset">חזרה לברירת מחדל</button>
-      </div>
-      <input type="file" id="tplFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden">
-      <details style="margin-top:10px"><summary class="muted">שדות שאפשר לשים בתבנית</summary>
-        <div class="muted" style="line-height:1.9;margin-top:6px">
-          <code>{employeeName}</code> <code>{employeeId}</code> <code>{department}</code> <code>{companyName}</code>
-          <code>{periodLabel}</code> <code>{periodStart}</code> <code>{periodEnd}</code> <code>{reportDate}</code> <code>{signDate}</code>
-          <code>{total}</code> <code>{itemCount}</code> <code>{notes}</code><br>
-          שורות טבלה: <code>{#items}</code> … <code>{index}</code> <code>{date}</code> <code>{category}</code> <code>{description}</code> <code>{receipt}</code> <code>{amount}</code> … <code>{/items}</code><br>
-          סיכום: <code>{#byCategory}</code> <code>{name}</code> <code>{count}</code> <code>{sum}</code> <code>{/byCategory}</code><br>
-          חתימה: תמונה כלשהי בתבנית שבטקסט החלופי (Alt Text) שלה כתוב <code>SIGNATURE</code>.
-        </div>
-      </details>
+      <div class="muted" style="margin-bottom:8px">לפי נוהל אש"ל לעובדים. מדווח בפרופר טיים, ללא קבלות.</div>
+      <div id="tierList"></div>
+      <button class="btn sec block" id="btnAshalReset">שחזור תעריפי הנוהל</button>
     </div>
     <div class="card">
       <h2>גיבוי</h2>
@@ -276,7 +259,8 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
 <div class="spin" id="spin"><div style="font-size:30px">⏳</div><div id="spinTxt">מכין…</div></div>
 
 <script src="vendor/pizzip.min.js"></script>
-<script src="vendor/docxtemplater.min.js"></script>
+<script src="vendor/exceljs.min.js"></script>
+<script src="xlsx-fill.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
 <script src="app.js"></script>
 </body>
