@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f4e79">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="הוצאות">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<title>הוצאות אישיות</title>
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--ink:#1c2430;--muted:#6b7686;--line:#e2e6ec;--pri:#1f4e79;--pri2:#2e6da4;--ok:#1e8e5a;--warn:#b26a00;--bad:#c0392b;--r:14px}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;font-size:16px}
+header{position:sticky;top:0;z-index:5;background:var(--pri);color:#fff;padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:18px;margin:0}
+.chip{background:rgba(255,255,255,.18);border-radius:20px;padding:4px 10px;font-size:13px}
+main{padding:12px 12px calc(90px + env(safe-area-inset-bottom))}
+nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:6}
+nav button{flex:1;border:0;background:none;padding:10px 0 8px;font-size:12px;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:2px}
+nav button .i{font-size:22px;line-height:1}
+nav button.on{color:var(--pri);font-weight:600}
+.view{display:none}.view.on{display:block}
+.card{background:var(--card);border-radius:var(--r);padding:14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+.card h2{font-size:16px;margin:0 0 10px}
+.sum{display:flex;justify-content:space-between;align-items:flex-end}
+.sum .big{font-size:28px;font-weight:700;color:var(--pri)}
+.muted{color:var(--muted);font-size:13px}
+.banner{background:#fff4e0;border:1px solid #f3d29a;color:#6b4300;border-radius:var(--r);padding:10px 12px;margin-bottom:12px;font-size:14px}
+.banner.ok{background:#e6f5ee;border-color:#a7dcc2;color:#0f5a37}
+.list .item{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.list .item:last-child{border-bottom:0}
+.item .thumb{width:46px;height:46px;border-radius:8px;background:#eef1f5 center/cover no-repeat;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--muted)}
+.item .mid{flex:1;min-width:0}
+.item .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .amt{font-weight:700;white-space:nowrap}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;background:#eef1f5;color:var(--muted);margin-inline-start:4px}
+.tag.warn{background:#fff1dc;color:var(--warn)}
+.tag.ok{background:#e3f4ec;color:var(--ok)}
+.fab{position:fixed;left:18px;bottom:calc(78px + env(safe-area-inset-bottom));width:60px;height:60px;border-radius:50%;border:0;background:var(--pri2);color:#fff;font-size:32px;box-shadow:0 4px 12px rgba(0,0,0,.25);z-index:7}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font-family:inherit}
+textarea{min-height:70px}
+input[type=checkbox]{width:auto;transform:scale(1.3);margin-inline-end:8px}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.btn{text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:10px;padding:12px 14px;font-size:15px;font-weight:600;background:var(--pri);color:#fff;font-family:inherit}
+.btn.sec{background:#e8eef5;color:var(--pri)}
+.btn.danger{background:#fbe9e7;color:var(--bad)}
+.btn.ok{background:var(--ok)}
+.btn.block{width:100%;margin-top:10px}
+.btn:disabled{opacity:.45}
+.sheet{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:20;display:none;align-items:flex-end}
+.sheet.on{display:flex}
+.sheet .panel{background:var(--bg);width:100%;max-height:94vh;overflow:auto;border-radius:18px 18px 0 0;padding:14px 14px calc(18px + env(safe-area-inset-bottom))}
+.panel .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.panel .top h2{margin:0;font-size:18px}
+.x{border:0;background:none;font-size:26px;color:var(--muted)}
+.receipts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.rc{position:relative;width:92px;height:118px;border-radius:10px;background:#dde3ea center/cover no-repeat;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--muted);border:1px solid var(--line)}
+.rc button{position:absolute;border:0;border-radius:50%;width:28px;height:28px;background:rgba(0,0,0,.6);color:#fff;font-size:15px}
+.rc .del{top:4px;left:4px}.rc .rot{top:4px;right:4px}
+.ashal{background:#eef5ff;border-radius:10px;padding:10px;margin-top:10px}
+.full{position:fixed;inset:0;background:var(--bg);z-index:30;overflow:auto;display:none;padding:calc(env(safe-area-inset-top) + 10px) 12px calc(20px + env(safe-area-inset-bottom))}
+.full.on{display:block}
+table.rep{width:100%;border-collapse:collapse;font-size:13px}
+table.rep th,table.rep td{border:1px solid var(--line);padding:6px 5px;text-align:right}
+table.rep th{background:#e7eef7}
+table.rep tfoot td{font-weight:700;background:#f4f6f9}
+.gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.gallery div{aspect-ratio:3/4;border-radius:8px;background:#dde3ea center/cover no-repeat;position:relative;font-size:12px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.gallery div span{position:absolute;bottom:3px;right:3px;background:rgba(0,0,0,.6);color:#fff;border-radius:6px;padding:0 5px}
+.sigbox{border:1px dashed #aab4c0;border-radius:10px;background:#fff;height:120px;display:flex;align-items:center;justify-content:center}
+.sigbox img{max-height:110px;max-width:100%}
+canvas#sigpad{width:100%;height:180px;background:#fff;border:1px solid var(--line);border-radius:10px;touch-action:none}
+.catrow{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.catrow input[type=text]{flex:1}
+.catrow .sm{border:0;background:#eef1f5;border-radius:8px;width:38px;height:38px;font-size:18px;color:var(--bad)}
+.toast{position:fixed;bottom:calc(150px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;z-index:50;opacity:0;transition:opacity .25s;pointer-events:none;max-width:90vw;text-align:center}
+.toast.on{opacity:.92}
+.empty{text-align:center;color:var(--muted);padding:26px 8px}
+.steps{counter-reset:s;padding:0;margin:0;list-style:none}
+.steps li{counter-increment:s;padding:6px 0;font-size:14px}
+.steps li::before{content:counter(s);display:inline-flex;width:22px;height:22px;border-radius:50%;background:var(--pri);color:#fff;align-items:center;justify-content:center;font-size:12px;margin-inline-end:8px}
+.hidden{display:none!important}
+.spin{position:fixed;inset:0;background:rgba(255,255,255,.7);z-index:60;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;font-weight:600;color:var(--pri)}
+.spin.on{display:flex}
+code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;direction:ltr;display:inline-block}
+</style>
+</head>
+<body>
+<header>
+  <h1>הוצאות אישיות</h1>
+  <span class="chip" id="hdrPeriod"></span>
+</header>
+
+<main>
+  <!-- EXPENSES -->
+  <section class="view on" id="view-expenses">
+    <div id="remind"></div>
+    <div class="card">
+      <div class="sum">
+        <div>
+          <div class="muted">תקופה נוכחית</div>
+          <div id="curRange" style="font-weight:600"></div>
+          <div class="muted" id="curCount"></div>
+        </div>
+        <div class="big" id="curTotal">₪0</div>
+      </div>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <select id="listPeriod"></select>
+    </div>
+    <div class="card list" id="expList"></div>
+  </section>
+
+  <!-- REPORT -->
+  <section class="view" id="view-report">
+    <div class="card">
+      <h2>דוח חודשי</h2>
+      <label>תקופת דוח</label>
+      <select id="repPeriod"></select>
+      <div id="repStatus" style="margin-top:10px"></div>
+    </div>
+    <div id="repChecks"></div>
+    <div class="card" id="repSummary"></div>
+    <button class="btn block" id="btnReview">עיון בדוח ואישור ←</button>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view" id="view-settings">
+    <div class="card">
+      <h2>פרטי עובד</h2>
+      <label>שם מלא</label><input id="sName">
+      <div class="row">
+        <div><label>מס' עובד</label><input id="sEmpId"></div>
+        <div><label>מחלקה</label><input id="sDept"></div>
+      </div>
+      <label>שם החברה (לכותרת הדוח)</label><input id="sCompany">
+    </div>
+    <div class="card">
+      <h2>שליחה להנהלת חשבונות</h2>
+      <label>מייל מנהל/ת החשבונות</label><input id="sAcctEmail" type="email" dir="ltr" placeholder="accounting@company.co.il">
+      <label>שם הנמען (לפתיחת המייל)</label><input id="sAcctName">
+      <label>הערה קבועה בדוח (אופציונלי)</label><input id="sNotes">
+    </div>
+    <div class="card">
+      <h2>חתימה</h2>
+      <div class="sigbox" id="sigPreview"><span class="muted">אין חתימה</span></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sec" id="btnSigDraw">✍️ לחתום על המסך</button>
+        <button class="btn sec" id="btnSigUpload">🖼️ תמונת חתימה</button>
+      </div>
+      <input type="file" id="sigFile" accept="image/*" class="hidden">
+      <div class="muted" style="margin-top:6px">בתמונה של חתימה על דף לבן הרקע יוסר אוטומטית.</div>
+    </div>
+    <div class="card">
+      <h2>סוגי הוצאות</h2>
+      <div class="muted" style="margin-bottom:8px">סמן ✓ א.ש.ל לסוג שמחושב לפי שעות ולא דורש קבלה.</div>
+      <div id="catList"></div>
+      <button class="btn sec block" id="btnAddCat">+ הוסף סוג הוצאה</button>
+    </div>
+    <div class="card">
+      <h2>תעריף א.ש.ל</h2>
+      <label>שיטת חישוב</label>
+      <select id="sAshalMode">
+        <option value="tiers">מדרגות לפי שעות</option>
+        <option value="hourly">תעריף לשעה</option>
+      </select>
+      <div id="ashalHourly"><label>תעריף לשעה (₪)</label><input id="sAshalRate" type="number" inputmode="decimal"></div>
+      <div id="ashalTiers">
+        <div class="muted" style="margin:8px 0">משעה (כולל) ← סכום ליום. המדרגה הגבוהה שמתאימה נבחרת.</div>
+        <div id="tierList"></div>
+        <button class="btn sec block" id="btnAddTier">+ הוסף מדרגה</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>תבנית הדוח (Word)</h2>
+      <div id="tplStatus" class="muted"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sec" id="btnTplUpload">העלאת תבנית</button>
+        <button class="btn sec" id="btnTplReset">חזרה לברירת מחדל</button>
+      </div>
+      <input type="file" id="tplFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden">
+      <details style="margin-top:10px"><summary class="muted">שדות שאפשר לשים בתבנית</summary>
+        <div class="muted" style="line-height:1.9;margin-top:6px">
+          <code>{employeeName}</code> <code>{employeeId}</code> <code>{department}</code> <code>{companyName}</code>
+          <code>{periodLabel}</code> <code>{periodStart}</code> <code>{periodEnd}</code> <code>{reportDate}</code> <code>{signDate}</code>
+          <code>{total}</code> <code>{itemCount}</code> <code>{notes}</code><br>
+          שורות טבלה: <code>{#items}</code> … <code>{index}</code> <code>{date}</code> <code>{category}</code> <code>{description}</code> <code>{receipt}</code> <code>{amount}</code> … <code>{/items}</code><br>
+          סיכום: <code>{#byCategory}</code> <code>{name}</code> <code>{count}</code> <code>{sum}</code> <code>{/byCategory}</code><br>
+          חתימה: תמונה כלשהי בתבנית שבטקסט החלופי (Alt Text) שלה כתוב <code>SIGNATURE</code>.
+        </div>
+      </details>
+    </div>
+    <div class="card">
+      <h2>גיבוי</h2>
+      <div class="muted" id="storageInfo"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn sec" id="btnBackup">⬇️ ייצוא גיבוי</button>
+        <button class="btn sec" id="btnRestore">⬆️ שחזור</button>
+      </div>
+      <input type="file" id="restoreFile" accept=".json,application/json" class="hidden">
+      <button class="btn sec block" id="btnIcs">📅 תזכורת חודשית ליומן (24 לחודש)</button>
+    </div>
+    <button class="btn block" id="btnSaveSettings">שמירת הגדרות</button>
+    <div class="muted" style="text-align:center;margin-top:14px">גרסה <span id="ver"></span></div>
+  </section>
+</main>
+
+<button class="fab" id="fab" aria-label="הוצאה חדשה">+</button>
+
+<nav>
+  <button data-v="expenses" class="on"><span class="i">🧾</span>הוצאות</button>
+  <button data-v="report"><span class="i">📄</span>דוח</button>
+  <button data-v="settings"><span class="i">⚙️</span>הגדרות</button>
+</nav>
+
+<!-- EXPENSE FORM -->
+<div class="sheet" id="sheet">
+  <div class="panel">
+    <div class="top"><h2 id="fTitle">הוצאה חדשה</h2><button class="x" id="fClose">×</button></div>
+    <label>סוג הוצאה</label>
+    <select id="fCat"></select>
+    <div class="row">
+      <div><label>תאריך</label><input id="fDate" type="date"></div>
+      <div id="fAmountWrap"><label>סכום (₪)</label><input id="fAmount" type="number" inputmode="decimal" step="0.01" placeholder="0.00"></div>
+    </div>
+    <div class="ashal hidden" id="fAshal">
+      <div class="row">
+        <div><label>שעות</label><input id="fHours" type="number" inputmode="decimal" step="0.5"></div>
+        <div><label>סכום מחושב</label><input id="fAshalAmt" readonly></div>
+      </div>
+      <div class="muted" id="fAshalNote" style="margin-top:6px">א.ש.ל – לא נדרשת קבלה.</div>
+    </div>
+    <label>תיאור / ספק</label>
+    <input id="fDesc" placeholder="לדוגמה: דלק – פז, נסיעה לאתר">
+    <div id="fRcptWrap">
+      <label>קבלה / חשבונית</label>
+      <div class="row">
+        <button class="btn sec" id="btnCam">📷 צילום</button>
+        <button class="btn sec" id="btnPick">📁 קובץ / PDF</button>
+      </div>
+      <label style="display:flex;align-items:center;color:var(--ink);font-size:14px"><input type="checkbox" id="fScan" checked>מצב סריקה (שיפור ניגודיות למסמך)</label>
+      <input type="file" id="camInput" accept="image/*" capture="environment" class="hidden">
+      <input type="file" id="pickInput" accept="image/*,application/pdf" multiple class="hidden">
+      <div class="receipts" id="fReceipts"></div>
+    </div>
+    <button class="btn block" id="fSave">שמירה</button>
+    <button class="btn danger block hidden" id="fDelete">מחיקת הוצאה</button>
+  </div>
+</div>
+
+<!-- SIGNATURE PAD -->
+<div class="sheet" id="sigSheet">
+  <div class="panel">
+    <div class="top"><h2>חתימה</h2><button class="x" id="sigClose">×</button></div>
+    <canvas id="sigpad"></canvas>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sec" id="sigClear">ניקוי</button>
+      <button class="btn" id="sigSave">שמירת חתימה</button>
+    </div>
+  </div>
+</div>
+
+<!-- REVIEW / SIGN / SEND -->
+<div class="full" id="review">
+  <div class="top" style="display:flex;justify-content:space-between;align-items:center">
+    <h2 style="margin:0;font-size:18px" id="rvTitle">עיון בדוח</h2><button class="x" id="rvClose">×</button>
+  </div>
+  <div id="rvBody"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="spin" id="spin"><div style="font-size:30px">⏳</div><div id="spinTxt">מכין…</div></div>
+
+<script src="vendor/pizzip.min.js"></script>
+<script src="vendor/docxtemplater.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
