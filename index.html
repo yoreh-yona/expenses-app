@@ -86,6 +86,20 @@ canvas#sigpad{width:100%;height:180px;background:#fff;border:1px solid var(--lin
 .hidden{display:none!important}
 .spin{position:fixed;inset:0;background:rgba(255,255,255,.7);z-index:60;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;font-weight:600;color:var(--pri)}
 .spin.on{display:flex}
+.viewer{position:fixed;inset:0;background:#111;z-index:40;display:none;flex-direction:column;color:#fff;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+.viewer.on{display:flex}
+.vtop{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;font-weight:600}
+.vstage{flex:1;position:relative;overflow:hidden;touch-action:none}
+.vstage img{position:absolute;transform-origin:0 0;user-select:none;-webkit-user-drag:none;pointer-events:none}
+.vcrop{flex:1;position:relative;overflow:hidden;touch-action:none}
+.vcrop canvas#cBase{position:absolute}
+.vcrop svg{position:absolute;inset:0;width:100%;height:100%}
+#cLoupe{position:absolute;top:12px;width:120px;height:120px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,.5);pointer-events:none}
+.vbar{display:flex;gap:6px;padding:8px 10px;overflow-x:auto}
+.vbar button{flex:1;white-space:nowrap;border:0;border-radius:10px;padding:11px 8px;background:#2a2f36;color:#fff;font-size:14px;font-family:inherit}
+.vbar button.on{background:var(--pri2)}
+.vbar button:disabled{opacity:.4}
+.gallery div{cursor:pointer}
 code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;direction:ltr;display:inline-block}
 </style>
 </head>
@@ -225,7 +239,9 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
         <button class="btn sec" id="btnCam">📷 צילום</button>
         <button class="btn sec" id="btnPick">📁 קובץ / PDF</button>
       </div>
-      <label style="display:flex;align-items:center;color:var(--ink);font-size:14px"><input type="checkbox" id="fScan" checked>מצב סריקה (שיפור ניגודיות למסמך)</label>
+      <label>עיבוד תמונה</label>
+      <select id="fScanMode"><option value="color">סריקה צבעונית (רקע לבן)</option><option value="bw">סריקה שחור-לבן</option><option value="none">צילום מקורי</option></select>
+      <div class="muted" style="margin-top:4px">לחיצה על תמונה פותחת אותה: הגדלה בצביטה, חיתוך ויישור, סיבוב ושינוי עיבוד.</div>
       <input type="file" id="camInput" accept="image/*" capture="environment" class="hidden">
       <input type="file" id="pickInput" accept="image/*,application/pdf" multiple class="hidden">
       <div class="receipts" id="fReceipts"></div>
@@ -255,12 +271,29 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
   <div id="rvBody"></div>
 </div>
 
+<!-- RECEIPT VIEWER -->
+<div class="viewer" id="viewer">
+  <div class="vtop"><button class="x" id="vDone" style="color:#fff">✓</button><span id="vTitle">קבלה</span><span style="width:40px"></span></div>
+  <div class="vstage" id="vStage"><img id="vImg" alt=""></div>
+  <div class="vcrop hidden" id="vCrop"><canvas id="cBase"></canvas><svg id="cSvg"></svg><canvas id="cLoupe" class="hidden"></canvas></div>
+  <div class="vbar" id="vModes">
+    <button data-m="color">סריקה צבעונית</button><button data-m="bw">שחור-לבן</button><button data-m="none">מקור</button>
+  </div>
+  <div class="vbar" id="vTools">
+    <button id="vCropBtn">✂️ חיתוך ויישור</button><button id="vRotBtn">⟳ סיבוב</button><button id="vDelBtn" style="color:#ff8a80">🗑 מחיקה</button>
+  </div>
+  <div class="vbar hidden" id="vCropBar">
+    <button id="cCancel">ביטול</button><button id="cAuto">🔍 זיהוי אוטומטי</button><button id="cFull">כל התמונה</button><button id="cOk" class="on">✓ אישור</button>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <div class="spin" id="spin"><div style="font-size:30px">⏳</div><div id="spinTxt">מכין…</div></div>
 
 <script src="vendor/pizzip.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
 <script src="xlsx-fill.js"></script>
+<script src="imgproc.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
 <script src="app.js"></script>
 </body>

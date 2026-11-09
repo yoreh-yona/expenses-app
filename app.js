@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -203,8 +203,9 @@ async function openForm(e) {
   $('fHours').value = e?.hours || '';
   $('fDesc').value = e?.description || '';
   $('fDelete').classList.toggle('hidden', !e);
-  if (e?.receipts) for (const rid of e.receipts) { const f = await DB.get('files', rid); if (f) F.receipts.push({id: rid, blob: f.blob, type: f.type}); }
+  if (e?.receipts) for (const rid of e.receipts) { const f = await DB.get('files', rid); if (f) F.receipts.push({id: rid, blob: f.blob, type: f.type, orig: f.orig || (f.type.startsWith('image/') ? f.blob : null), edit: f.edit || {quad: null, rot: 0, mode: 'none'}}); }
   if (e && S.sentReports[e.period]) toast('שים לב: ההוצאה שייכת לדוח שכבר נשלח');
+  $('fScanMode').value = S.scanMode || 'color';
   onCatChange(); renderFormReceipts();
   $('sheet').classList.add('on');
 }
@@ -234,18 +235,25 @@ $('btnPick').onclick = () => $('pickInput').click();
 $('camInput').onchange = ev => addReceiptFiles(ev.target.files, ev.target);
 $('pickInput').onchange = ev => addReceiptFiles(ev.target.files, ev.target);
 
-async function addReceiptFiles(files, input) {
+async function addReceiptFiles(fileList, input) {
+  const files = [...fileList];
   spin(true, 'מעבד תמונה…');
+  const mode = $('fScanMode').value; S.scanMode = mode; saveSettingsObj();
   try {
     for (const f of files) {
       if (f.type === 'application/pdf') F.receipts.push({id: uid(), blob: f, type: 'application/pdf', isNew: true});
       else if (f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name)) {
-        const blob = await processImage(f, $('fScan').checked);
-        F.receipts.push({id: uid(), blob, type: 'image/jpeg', isNew: true});
+        const orig = await normalizeOrig(f);
+        const edit = {quad: null, rot: 0, mode};
+        if (mode !== 'none') { const c = await blobCanvas(orig); edit.quad = ImgProc.detect(c); }
+        const blob = await renderReceipt(orig, edit);
+        F.receipts.push({id: uid(), blob, orig, edit, type: 'image/jpeg', isNew: true});
       }
     }
   } catch (err) { console.error(err); toast('לא הצלחתי לעבד את הקובץ'); }
   input.value = ''; spin(false); renderFormReceipts();
+  const last = F.receipts[F.receipts.length - 1];
+  if (last && last.orig && last.isNew && files.length === 1) openViewer(F.receipts.length - 1); // let the user check / fix the crop right away
 }
 
 async function loadBitmap(blob) {
@@ -254,51 +262,200 @@ async function loadBitmap(blob) {
     return await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(blob); });
   }
 }
-async function processImage(file, scan, rotate = 0) {
-  const bmp = await loadBitmap(file);
-  const MAX = 1800;
-  let w = bmp.width, h = bmp.height; const k = Math.min(1, MAX / Math.max(w, h)); w = Math.round(w * k); h = Math.round(h * k);
-  const rot = rotate % 360; const swap = rot === 90 || rot === 270;
-  const c = document.createElement('canvas'); c.width = swap ? h : w; c.height = swap ? w : h;
-  const x = c.getContext('2d');
-  x.translate(c.width / 2, c.height / 2); x.rotate(rot * Math.PI / 180); x.drawImage(bmp, -w / 2, -h / 2, w, h);
-  if (scan) {
-    const im = x.getImageData(0, 0, c.width, c.height), d = im.data;
-    const hist = new Uint32Array(256);
-    for (let i = 0; i < d.length; i += 4) { const g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0; d[i] = g; hist[g]++; }
-    const total = d.length / 4; let lo = 0, hi = 255, acc = 0;
-    for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc > total * 0.02) { lo = i; break; } }
-    acc = 0; for (let i = 255; i >= 0; i--) { acc += hist[i]; if (acc > total * 0.15) { hi = i; break; } }
-    if (hi - lo < 30) { lo = 0; hi = 255; }
-    const span = hi - lo;
-    for (let i = 0; i < d.length; i += 4) {
-      let v = (d[i] - lo) * 255 / span; v = v < 0 ? 0 : v > 255 ? 255 : v;
-      v = 255 * Math.pow(v / 255, 1.4); // darken ink a bit
-      d[i] = d[i + 1] = d[i + 2] = v;
-    }
-    x.putImageData(im, 0, 0);
-  }
-  return await new Promise(res => c.toBlob(res, 'image/jpeg', 0.8));
+async function blobCanvas(blob, max = 2400) {
+  const bmp = await loadBitmap(blob);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = ImgProc.mkCanvas(Math.round(bmp.width * k), Math.round(bmp.height * k));
+  const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(bmp, 0, 0, c.width, c.height);
+  return c;
+}
+const canvasBlob = (c, type = 'image/jpeg', q = 0.85) => new Promise(res => c.toBlob(res, type, q));
+async function normalizeOrig(file) { return canvasBlob(await blobCanvas(file, 2400), 'image/jpeg', 0.9); } // upright, size-capped original kept for re-editing
+async function renderReceipt(orig, edit) {
+  let c = await blobCanvas(orig, 2400);
+  if (edit.quad && !ImgProc.isFull(edit.quad, c.width, c.height)) c = ImgProc.warp(c, edit.quad);
+  c = ImgProc.rotate(c, edit.rot || 0);
+  const k = Math.min(1, 1800 / Math.max(c.width, c.height));
+  if (k < 1) { const s = ImgProc.mkCanvas(Math.round(c.width * k), Math.round(c.height * k)); const x = s.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, s.width, s.height); c = s; }
+  c = ImgProc.enhance(c, edit.mode);
+  return canvasBlob(c, 'image/jpeg', 0.82);
 }
 
 function renderFormReceipts() {
   const box = $('fReceipts');
   box.innerHTML = F.receipts.map((r, i) => `<div class="rc" data-i="${i}">${r.type === 'application/pdf' ? 'PDF' : ''}
-     <button class="del" data-i="${i}">✕</button>${r.type.startsWith('image/') ? `<button class="rot" data-i="${i}">⟳</button>` : ''}</div>`).join('');
+     <button class="del" data-i="${i}">✕</button></div>`).join('');
   box.querySelectorAll('.rc').forEach(el => {
     const r = F.receipts[el.dataset.i];
-    if (r.type.startsWith('image/')) el.style.backgroundImage = `url(${URL.createObjectURL(r.blob)})`;
+    if (r.type.startsWith('image/')) { el.style.backgroundImage = `url(${URL.createObjectURL(r.blob)})`; el.onclick = () => openViewer(+el.dataset.i); }
   });
-  box.querySelectorAll('.del').forEach(b => b.onclick = () => {
+  box.querySelectorAll('.del').forEach(b => b.onclick = ev => {
+    ev.stopPropagation();
     const r = F.receipts.splice(b.dataset.i, 1)[0]; if (!r.isNew) F.removed.push(r.id); renderFormReceipts();
   });
-  box.querySelectorAll('.rot').forEach(b => b.onclick = async () => {
-    const r = F.receipts[b.dataset.i];
-    r.blob = await processImage(r.blob, false, 90);
-    if (!r.isNew) { F.removed.push(r.id); r.id = uid(); r.isNew = true; }
-    renderFormReceipts();
-  });
 }
+
+/* ---------------- receipt viewer: pinch-zoom, filters, rotate, crop & align ---------------- */
+const V = {i: -1, readonly: false, s: 1, tx: 0, ty: 0, fit: null, ptrs: new Map(), start: null, lastTap: 0};
+function vRec() { return V.readonly ? V.ro : F.receipts[V.i]; }
+async function openViewer(i, ro) {
+  V.readonly = !!ro; V.ro = ro || null; V.i = i;
+  $('viewer').classList.add('on');
+  $('vTools').classList.toggle('hidden', V.readonly);
+  $('vModes').classList.toggle('hidden', V.readonly || !vRec().orig);
+  $('vCropBar').classList.add('hidden'); $('vCrop').classList.add('hidden'); $('vStage').classList.remove('hidden');
+  syncModes(); await vShow();
+}
+function closeViewer() { $('viewer').classList.remove('on'); if (!V.readonly) renderFormReceipts(); }
+function syncModes() {
+  const r = vRec(); const m = r?.edit?.mode || 'none';
+  document.querySelectorAll('#vModes button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  $('vCropBtn').disabled = $('vRotBtn').disabled = !r?.orig;
+}
+async function vShow() {
+  const img = $('vImg'); const r = vRec();
+  await new Promise(res => { img.onload = res; img.onerror = res; img.src = URL.createObjectURL(r.blob); });
+  vFit();
+}
+function vFit() {
+  const st = $('vStage').getBoundingClientRect(), img = $('vImg');
+  const k = Math.min(st.width / img.naturalWidth, st.height / img.naturalHeight);
+  const w = img.naturalWidth * k, h = img.naturalHeight * k;
+  V.fit = {w, h, l: (st.width - w) / 2, t: (st.height - h) / 2};
+  Object.assign(img.style, {width: w + 'px', height: h + 'px', left: V.fit.l + 'px', top: V.fit.t + 'px'});
+  V.s = 1; V.tx = 0; V.ty = 0; vApply();
+}
+function vClamp() {
+  if (V.s <= 1) { V.s = 1; V.tx = 0; V.ty = 0; return; }
+  const st = $('vStage').getBoundingClientRect(), f = V.fit;
+  const w = f.w * V.s, h = f.h * V.s;
+  const minX = Math.min(0, st.width - w) - f.l, maxX = Math.max(0, st.width - w) - f.l;
+  const minY = Math.min(0, st.height - h) - f.t, maxY = Math.max(0, st.height - h) - f.t;
+  if (w <= st.width) V.tx = (st.width - w) / 2 - f.l; else V.tx = Math.min(maxX, Math.max(minX, V.tx));
+  if (h <= st.height) V.ty = (st.height - h) / 2 - f.t; else V.ty = Math.min(maxY, Math.max(minY, V.ty));
+}
+function vApply() { $('vImg').style.transform = `translate(${V.tx}px,${V.ty}px) scale(${V.s})`; }
+function vZoomAt(mx, my, s) {
+  const f = V.fit, lx = (mx - f.l - V.tx) / V.s, ly = (my - f.t - V.ty) / V.s;
+  V.s = Math.min(6, Math.max(1, s)); V.tx = mx - f.l - V.s * lx; V.ty = my - f.t - V.s * ly; vClamp(); vApply();
+}
+(function viewerGestures() {
+  const st = $('vStage');
+  const local = e => { const r = st.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  st.addEventListener('pointerdown', e => {
+    st.setPointerCapture(e.pointerId); V.ptrs.set(e.pointerId, local(e));
+    const p = [...V.ptrs.values()];
+    if (p.length === 2) V.start = {d: Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]), s: V.s, m: [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2], tx: V.tx, ty: V.ty};
+    else if (p.length === 1) {
+      const now = Date.now();
+      if (now - V.lastTap < 300) { vZoomAt(p[0][0], p[0][1], V.s > 1.2 ? 1 : 2.5); V.lastTap = 0; } else V.lastTap = now;
+      V.start = {pan: p[0], tx: V.tx, ty: V.ty};
+    }
+  });
+  st.addEventListener('pointermove', e => {
+    if (!V.ptrs.has(e.pointerId)) return; V.ptrs.set(e.pointerId, local(e));
+    const p = [...V.ptrs.values()];
+    if (p.length >= 2 && V.start?.d) {
+      const d = Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]), m = [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2];
+      const f = V.fit, s0 = V.start.s, lx = (V.start.m[0] - f.l - V.start.tx) / s0, ly = (V.start.m[1] - f.t - V.start.ty) / s0;
+      V.s = Math.min(6, Math.max(1, s0 * d / V.start.d)); V.tx = m[0] - f.l - V.s * lx; V.ty = m[1] - f.t - V.s * ly; vClamp(); vApply();
+    } else if (p.length === 1 && V.start?.pan && V.s > 1) {
+      V.tx = V.start.tx + p[0][0] - V.start.pan[0]; V.ty = V.start.ty + p[0][1] - V.start.pan[1]; vClamp(); vApply();
+    }
+  });
+  const up = e => { V.ptrs.delete(e.pointerId); const p = [...V.ptrs.values()]; V.start = p.length === 1 ? {pan: p[0], tx: V.tx, ty: V.ty} : null; };
+  st.addEventListener('pointerup', up); st.addEventListener('pointercancel', up);
+  st.addEventListener('wheel', e => { e.preventDefault(); const [x, y] = local(e); vZoomAt(x, y, V.s * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); }, {passive: false});
+  window.addEventListener('resize', () => { if ($('viewer').classList.contains('on') && !$('vStage').classList.contains('hidden')) vFit(); });
+})();
+async function vReprocess() {
+  const r = vRec(); spin(true, 'מעבד…');
+  try {
+    r.blob = await renderReceipt(r.orig, r.edit);
+    if (!r.isNew) { F.removed.push(r.id); r.id = uid(); r.isNew = true; }
+    await vShow();
+  } catch (err) { console.error(err); toast('העיבוד נכשל'); }
+  spin(false);
+}
+document.querySelectorAll('#vModes button').forEach(b => b.onclick = async () => {
+  const r = vRec(); if (!r.orig || r.edit.mode === b.dataset.m) return;
+  r.edit.mode = b.dataset.m; syncModes(); await vReprocess();
+});
+$('vRotBtn').onclick = async () => { const r = vRec(); r.edit.rot = ((r.edit.rot || 0) + 90) % 360; await vReprocess(); };
+$('vDelBtn').onclick = () => { const r = F.receipts.splice(V.i, 1)[0]; if (r && !r.isNew) F.removed.push(r.id); closeViewer(); };
+$('vDone').onclick = closeViewer;
+
+/* crop & align: drag 4 corners on the original photo */
+const C = {quad: null, scale: 1, drag: -1, img: null};
+async function openCrop() {
+  const r = vRec(); spin(true, 'טוען…');
+  const c = await blobCanvas(r.orig, 2400); spin(false);
+  C.img = c;
+  const area = $('vCrop'); area.classList.remove('hidden'); $('vStage').classList.add('hidden');
+  $('vTools').classList.add('hidden'); $('vModes').classList.add('hidden'); $('vCropBar').classList.remove('hidden');
+  const box = area.getBoundingClientRect(), pad = 22;
+  C.scale = Math.min((box.width - 2 * pad) / c.width, (box.height - 2 * pad) / c.height);
+  const w = c.width * C.scale, h = c.height * C.scale, l = (box.width - w) / 2, t = (box.height - h) / 2;
+  const cv = $('cBase'); cv.width = Math.round(w * devicePixelRatio); cv.height = Math.round(h * devicePixelRatio);
+  Object.assign(cv.style, {width: w + 'px', height: h + 'px', left: l + 'px', top: t + 'px'});
+  cv.getContext('2d').drawImage(c, 0, 0, cv.width, cv.height);
+  C.off = [l, t];
+  const svg = $('cSvg'); svg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
+  C.quad = (r.edit.quad && r.edit.quad.map(p => [...p])) || ImgProc.fullQuad(c.width, c.height);
+  drawCrop();
+}
+function drawCrop(active = -1) {
+  const pts = C.quad.map(p => [C.off[0] + p[0] * C.scale, C.off[1] + p[1] * C.scale]);
+  const box = $('vCrop').getBoundingClientRect();
+  $('cSvg').innerHTML = `<path d="M0 0H${box.width}V${box.height}H0Z M${pts.map(p => p.join(' ')).join(' L')}Z" fill="rgba(0,0,0,.55)" fill-rule="evenodd"/>
+    <polygon points="${pts.map(p => p.join(',')).join(' ')}" fill="none" stroke="#4fc3f7" stroke-width="2"/>
+    ${pts.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="${i === active ? 16 : 13}" fill="rgba(79,195,247,.35)" stroke="#fff" stroke-width="3"/>`).join('')}`;
+}
+function loupe(i) {
+  const lp = $('cLoupe'); if (i < 0) { lp.classList.add('hidden'); return; }
+  lp.classList.remove('hidden');
+  const S2 = 120, z = 3 / C.scale, [x, y] = C.quad[i], x2 = lp.getContext('2d');
+  lp.width = lp.height = S2 * devicePixelRatio;
+  const src = S2 / (C.scale * 3); // source px shown
+  x2.drawImage(C.img, x - src / 2, y - src / 2, src, src, 0, 0, lp.width, lp.height);
+  x2.strokeStyle = '#4fc3f7'; x2.lineWidth = 2 * devicePixelRatio;
+  x2.beginPath(); x2.moveTo(lp.width / 2, 0); x2.lineTo(lp.width / 2, lp.height); x2.moveTo(0, lp.height / 2); x2.lineTo(lp.width, lp.height / 2); x2.stroke();
+  // keep the loupe away from the finger
+  const box = $('vCrop').getBoundingClientRect(), px = C.off[0] + x * C.scale;
+  lp.style.left = (px < box.width / 2 ? box.width - S2 - 12 : 12) + 'px';
+}
+(function cropGestures() {
+  const svg = $('cSvg');
+  const loc = e => { const r = $('vCrop').getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  svg.addEventListener('pointerdown', e => {
+    const [x, y] = loc(e);
+    let best = -1, bd = 44;
+    C.quad.forEach((p, i) => { const d = Math.hypot(C.off[0] + p[0] * C.scale - x, C.off[1] + p[1] * C.scale - y); if (d < bd) { bd = d; best = i; } });
+    if (best < 0) return;
+    C.drag = best; svg.setPointerCapture(e.pointerId); drawCrop(best); loupe(best);
+  });
+  svg.addEventListener('pointermove', e => {
+    if (C.drag < 0) return;
+    const [x, y] = loc(e);
+    C.quad[C.drag] = [Math.min(C.img.width, Math.max(0, (x - C.off[0]) / C.scale)), Math.min(C.img.height, Math.max(0, (y - C.off[1]) / C.scale))];
+    drawCrop(C.drag); loupe(C.drag);
+  });
+  const up = () => { C.drag = -1; drawCrop(); loupe(-1); };
+  svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
+})();
+function closeCrop() {
+  $('vCrop').classList.add('hidden'); $('vStage').classList.remove('hidden'); $('vCropBar').classList.add('hidden');
+  $('vTools').classList.remove('hidden'); $('vModes').classList.toggle('hidden', !vRec().orig); vFit();
+}
+$('vCropBtn').onclick = openCrop;
+$('cAuto').onclick = () => { const q = ImgProc.detect(C.img); if (q) { C.quad = q; drawCrop(); } else toast('לא זוהה מסמך – גרור את הפינות ידנית'); };
+$('cFull').onclick = () => { C.quad = ImgProc.fullQuad(C.img.width, C.img.height); drawCrop(); };
+$('cCancel').onclick = closeCrop;
+$('cOk').onclick = async () => {
+  const r = vRec();
+  r.edit.quad = ImgProc.isFull(C.quad, C.img.width, C.img.height) ? null : C.quad;
+  closeCrop(); await vReprocess();
+};
 
 $('fSave').onclick = async () => {
   const cat = $('fCat').value; const ash = !!catByName(cat)?.ashal;
@@ -319,7 +476,7 @@ $('fSave').onclick = async () => {
     amount: Math.round(amount * 100) / 100, hours, description: $('fDesc').value.trim(),
     receipts: ash ? [] : F.receipts.map(r => r.id), createdAt: old?.createdAt || Date.now(), updatedAt: Date.now()
   };
-  for (const r of F.receipts) if (r.isNew && !ash) await DB.put('files', {id: r.id, blob: r.blob, type: r.type});
+  for (const r of F.receipts) if (r.isNew && !ash) await DB.put('files', {id: r.id, blob: r.blob, type: r.type, orig: r.orig || null, edit: r.edit || null});
   const removed = ash ? [...F.removed, ...F.receipts.filter(r => !r.isNew).map(r => r.id)] : F.removed;
   for (const id of removed) await DB.del('files', id);
   await DB.put('expenses', rec);
@@ -425,9 +582,10 @@ async function openReview() {
   const gal = $('rvGal'); const cells = [];
   for (const e of items) for (const id of e.receipts || []) {
     const f = await DB.get('files', id); if (!f) continue;
-    cells.push(f.type.startsWith('image/') ? `<div style="background-image:url(${await fileURL(id)})"><span>#${e.index}</span></div>` : `<div>PDF<span>#${e.index}</span></div>`);
+    cells.push(f.type.startsWith('image/') ? `<div data-f="${id}" style="background-image:url(${await fileURL(id)})"><span>#${e.index}</span></div>` : `<div>PDF<span>#${e.index}</span></div>`);
   }
   gal.innerHTML = cells.join('') || '<div class="muted" style="grid-column:1/-1">אין קבלות</div>';
+  gal.querySelectorAll('[data-f]').forEach(el => el.onclick = async () => { const f = await DB.get('files', el.dataset.f); if (f) openViewer(-1, {blob: f.blob}); });
   $('rvOk').onchange = () => $('rvSign').disabled = !$('rvOk').checked;
   $('rvDraft').onclick = async () => {
     spin(true, 'מכין טיוטה…');
@@ -696,7 +854,7 @@ $('btnBackup').onclick = async () => {
   try {
     readSettingsForm();
     const files = [];
-    for (const f of await DB.all('files')) files.push({id: f.id, type: f.type, name: f.name, data: b64(await f.blob.arrayBuffer())});
+    for (const f of await DB.all('files')) files.push({id: f.id, type: f.type, name: f.name, data: b64(await f.blob.arrayBuffer()), orig: f.orig ? b64(await f.orig.arrayBuffer()) : null, edit: f.edit || null});
     const data = {app: 'expenses-app', version: VERSION, exportedAt: new Date().toISOString(), settings: S, expenses: await DB.all('expenses'), files};
     const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
     const name = `גיבוי_הוצאות_${todayISO()}.json`;
@@ -718,7 +876,7 @@ $('restoreFile').onchange = async ev => {
     if (data.app !== 'expenses-app') throw new Error('קובץ לא מתאים');
     await DB.clear('expenses'); await DB.clear('files');
     for (const e of data.expenses) await DB.put('expenses', e);
-    for (const x of data.files) await DB.put('files', {id: x.id, type: x.type, name: x.name, blob: new Blob([unb64(x.data)], {type: x.type})});
+    for (const x of data.files) await DB.put('files', {id: x.id, type: x.type, name: x.name, blob: new Blob([unb64(x.data)], {type: x.type}), orig: x.orig ? new Blob([unb64(x.orig)], {type: 'image/jpeg'}) : null, edit: x.edit || null});
     S = Object.assign(structuredClone(DEFAULT_SETTINGS), data.settings); await saveSettingsObj();
     urlCache.clear(); await loadExpenses(); renderSettings(); toast(`שוחזרו ${data.expenses.length} הוצאות`);
   } catch (err) { console.error(err); alert('השחזור נכשל: ' + err.message); }
