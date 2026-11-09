@@ -3,56 +3,46 @@
   'use strict';
   const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 
-  function solve(A, b) { // Gaussian elimination with partial pivoting
-    const n = b.length; A = A.map((r, i) => [...r, b[i]]);
-    for (let c = 0; c < n; c++) {
-      let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
-      [A[c], A[p]] = [A[p], A[c]];
-      for (let r = c + 1; r < n; r++) { const f = A[r][c] / A[c][c]; for (let k = c; k <= n; k++) A[r][k] -= f * A[c][k]; }
-    }
-    const x = new Array(n);
-    for (let r = n - 1; r >= 0; r--) { let s = A[r][n]; for (let k = r + 1; k < n; k++) s -= A[r][k] * x[k]; x[r] = s / A[r][r]; }
-    return x;
-  }
-  // H maps destination (x,y) -> source (u,v)
-  function homography(src, dst) {
-    const A = [], b = [];
-    for (let i = 0; i < 4; i++) {
-      const [x, y] = dst[i], [u, v] = src[i];
-      A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
-      A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
-    }
-    return solve(A, b);
-  }
-  const fullQuad = (w, h) => [[0, 0], [w, 0], [w, h], [0, h]];
-  const isFull = (q, w, h) => !q || fullQuad(w, h).every((p, i) => Math.abs(p[0] - q[i][0]) < 2 && Math.abs(p[1] - q[i][1]) < 2);
-
-  /** quad: [tl, tr, br, bl] in source pixels */
-  function warp(src, quad, maxSide = 2200) {
-    const d = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
-    let W = Math.max(d(quad[0], quad[1]), d(quad[3], quad[2])), H = Math.max(d(quad[0], quad[3]), d(quad[1], quad[2]));
-    const k = Math.min(1, maxSide / Math.max(W, H)); W = Math.max(2, Math.round(W * k)); H = Math.max(2, Math.round(H * k));
-    const h = homography(quad, [[0, 0], [W - 1, 0], [W - 1, H - 1], [0, H - 1]]);
-    const sw = src.width, sh = src.height;
-    const sd = src.getContext('2d').getImageData(0, 0, sw, sh).data;
-    const out = mkCanvas(W, H), octx = out.getContext('2d'), img = octx.createImageData(W, H), od = img.data;
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const den = h[6] * x + h[7] * y + 1;
-        let u = (h[0] * x + h[1] * y + h[2]) / den, v = (h[3] * x + h[4] * y + h[5]) / den;
-        u = u < 0 ? 0 : u > sw - 1.001 ? sw - 1.001 : u; v = v < 0 ? 0 : v > sh - 1.001 ? sh - 1.001 : v;
-        const x0 = u | 0, y0 = v | 0, fx = u - x0, fy = v - y0;
-        const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4;
-        const o = (y * W + x) * 4;
-        for (let c = 0; c < 3; c++) {
-          const a = sd[i00 + c] + (sd[i10 + c] - sd[i00 + c]) * fx, b = sd[i01 + c] + (sd[i11 + c] - sd[i01 + c]) * fx;
-          od[o + c] = a + (b - a) * fy;
-        }
-        od[o + 3] = 255;
-      }
-    }
-    octx.putImageData(img, 0, 0);
+  /** rotate by any angle (degrees, clockwise), canvas grows to fit, empty corners filled white */
+  function rotateAny(src, deg) {
+    deg = ((deg % 360) + 360) % 360;
+    if (deg % 90 === 0) return rotate(src, deg);
+    const t = deg * Math.PI / 180, c = Math.abs(Math.cos(t)), s = Math.abs(Math.sin(t));
+    const W = Math.round(src.width * c + src.height * s), H = Math.round(src.width * s + src.height * c);
+    const out = mkCanvas(W, H), x = out.getContext('2d');
+    x.fillStyle = '#fff'; x.fillRect(0, 0, W, H);
+    x.translate(W / 2, H / 2); x.rotate(t); x.imageSmoothingQuality = 'high'; x.drawImage(src, -src.width / 2, -src.height / 2);
     return out;
+  }
+  /** where a source point lands after rotateAny(src, deg) */
+  function rotPoint(p, w, h, deg) {
+    const t = deg * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+    const W = w * Math.abs(c) + h * Math.abs(s), H = w * Math.abs(s) + h * Math.abs(c);
+    const dx = p[0] - w / 2, dy = p[1] - h / 2;
+    return [W / 2 + dx * c - dy * s, H / 2 + dx * s + dy * c, W, H];
+  }
+  /** crop with a rectangle normalised to 0..1 */
+  function crop(src, r) {
+    if (!r) return src;
+    const x = Math.round(r.x * src.width), y = Math.round(r.y * src.height);
+    const w = Math.max(2, Math.round(r.w * src.width)), h = Math.max(2, Math.round(r.h * src.height));
+    const out = mkCanvas(w, h); out.getContext('2d').drawImage(src, x, y, w, h, 0, 0, w, h);
+    return out;
+  }
+  /** detect the document and return the straightening angle + axis-aligned crop (in the rotated image) */
+  function auto(src, baseDeg = 0) {
+    const q = detect(src); if (!q) return null;
+    const a1 = Math.atan2(q[1][1] - q[0][1], q[1][0] - q[0][0]), a2 = Math.atan2(q[2][1] - q[3][1], q[2][0] - q[3][0]);
+    let angle = -((a1 + a2) / 2) * 180 / Math.PI;
+    angle = Math.max(-45, Math.min(45, Math.round(angle * 2) / 2));
+    const deg = baseDeg + angle;
+    const pts = q.map(p => rotPoint(p, src.width, src.height, deg));
+    const W = pts[0][2], H = pts[0][3];
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    // inner box (between the two outer extremes) avoids table edges after straightening
+    xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
+    const x0 = (xs[0] + xs[1]) / 2, x1 = (xs[2] + xs[3]) / 2, y0 = (ys[0] + ys[1]) / 2, y1 = (ys[2] + ys[3]) / 2;
+    return {angle, crop: {x: Math.max(0, x0 / W), y: Math.max(0, y0 / H), w: Math.min(1, (x1 - x0) / W), h: Math.min(1, (y1 - y0) / H)}};
   }
 
   function rotate(src, deg) {
@@ -154,5 +144,5 @@
     return q;
   }
 
-  root.ImgProc = {warp, rotate, enhance, detect, fullQuad, isFull, mkCanvas};
+  root.ImgProc = {rotate, rotateAny, rotPoint, crop, auto, enhance, detect, mkCanvas};
 })(window);

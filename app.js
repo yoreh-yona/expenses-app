@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -126,10 +126,38 @@ function show(v) {
   if (v === 'expenses') renderExpenses();
   window.scrollTo(0, 0);
 }
-document.querySelectorAll('nav button').forEach(b => b.onclick = async () => {
+async function goTab(v) {
   if ($('view-settings').classList.contains('on')) { readSettingsForm(); await saveSettingsObj(); }
-  show(b.dataset.v);
+  const onHome = $('view-expenses').classList.contains('on');
+  if (v === 'expenses') { if (!closeLayer('tab')) show('expenses'); return; }
+  if (onHome) pushLayer('tab', () => show('expenses'));
+  show(v);
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => goTab(b.dataset.v));
+
+/* ---------------- phone back button: one step back, confirm before leaving ---------------- */
+const LAYERS = [];
+function pushLayer(id, hide) { LAYERS.push({id, hide}); history.pushState({layer: id, n: LAYERS.length}, ''); }
+function closeLayer(id) { // UI-initiated close: let history drive it so back-stack stays in sync
+  const top = LAYERS[LAYERS.length - 1];
+  if (!top || top.id !== id) return false;
+  history.back(); return true;
+}
+let EXIT_ARMED = false;
+window.addEventListener('popstate', () => {
+  const top = LAYERS.pop();
+  if (top) { top.hide(); return; }
+  if (EXIT_ARMED) return;
+  // at the root: we are now on the base entry; another back would leave the app
+  EXIT_ARMED = true; $('exitDlg').classList.add('on');
 });
+$('exitStay').onclick = () => { $('exitDlg').classList.remove('on'); EXIT_ARMED = false; history.pushState({guard: 1}, ''); };
+$('exitGo').onclick = () => {
+  $('exitDlg').classList.remove('on');
+  try { window.close(); } catch {}
+  setTimeout(() => toast('לחץ "חזור" פעם נוספת כדי לצאת', 3000), 150);
+  setTimeout(() => { if (EXIT_ARMED) { EXIT_ARMED = false; history.pushState({guard: 1}, ''); } }, 3200);
+};
 
 /* ---------------- expenses list ---------------- */
 function periodsList() {
@@ -160,7 +188,7 @@ async function renderExpenses() {
   const prev = periodsList().filter(p => p < cp && !S.sentReports[p] && EXP.some(e => e.period === p));
   if (prev.length) rem += `<div class="banner">יש דוח שלא סומן כנשלח: ${prev.map(periodLabel).join(', ')}</div>`;
   $('remind').innerHTML = rem;
-  const g = $('goRep'); if (g) g.onclick = ev => { ev.preventDefault(); show('report'); };
+  const g = $('goRep'); if (g) g.onclick = ev => { ev.preventDefault(); goTab('report'); };
 
   const sel = $('listPeriod');
   fillPeriodSelect(sel, listKey); listKey = sel.value;
@@ -172,7 +200,7 @@ async function renderExpenses() {
     const tag = ash ? `<span class="tag">${e.hours || 0} ש'</span>` : (e.receipts?.length ? '' : '<span class="tag warn">חסרה קבלה</span>');
     return `<div class="item" data-id="${e.id}">
       <div class="thumb" data-f="${!ash && e.receipts?.[0] ? e.receipts[0] : ''}">${ash ? '🕒' : (e.receipts?.length ? '' : '🧾')}</div>
-      <div class="mid"><div class="t">${esc(e.category)}${tag}</div><div class="muted">${fmtDate(e.date)} · ${esc(e.description || '')}</div></div>
+      <div class="mid"><div class="t">${esc(e.category)}${tag}${periodKeyFor(e.date) !== e.period ? '<span class="tag warn">מאוחרת</span>' : ''}</div><div class="muted">${fmtDate(e.date)} · ${esc(e.description || '')}</div></div>
       <div class="amt">${money(e.amount)}</div></div>`;
   }).join('');
   box.querySelectorAll('.item').forEach(el => el.onclick = () => openForm(EXP.find(x => x.id === el.dataset.id)));
@@ -198,21 +226,60 @@ async function openForm(e) {
   F = {id: e?.id || null, receipts: [], removed: []};
   $('fTitle').textContent = e ? 'עריכת הוצאה' : 'הוצאה חדשה';
   fillCatSelect($('fCat'), e?.category || S.categories[0]?.name);
-  $('fDate').value = e?.date || todayISO();
+  setFormDate(e?.date || todayISO(), e?.period);
   $('fAmount').value = e && !isAshal(e) ? e.amount : '';
   $('fHours').value = e?.hours || '';
   $('fDesc').value = e?.description || '';
   $('fDelete').classList.toggle('hidden', !e);
-  if (e?.receipts) for (const rid of e.receipts) { const f = await DB.get('files', rid); if (f) F.receipts.push({id: rid, blob: f.blob, type: f.type, orig: f.orig || (f.type.startsWith('image/') ? f.blob : null), edit: f.edit || {quad: null, rot: 0, mode: 'none'}}); }
+  if (e?.receipts) for (const rid of e.receipts) { const f = await DB.get('files', rid); if (f) F.receipts.push({id: rid, blob: f.blob, type: f.type, orig: f.orig || (f.type.startsWith('image/') ? f.blob : null), edit: normEdit(f.edit)}); }
   if (e && S.sentReports[e.period]) toast('שים לב: ההוצאה שייכת לדוח שכבר נשלח');
   $('fScanMode').value = S.scanMode || 'color';
   onCatChange(); renderFormReceipts();
-  $('sheet').classList.add('on');
+  $('sheet').classList.add('on'); pushLayer('form', hideForm);
 }
-function closeForm() { $('sheet').classList.remove('on'); F = null; }
+function hideForm() { $('sheet').classList.remove('on'); $('calDlg').classList.remove('on'); F = null; }
+function closeForm() { if (!closeLayer('form')) hideForm(); }
 $('fClose').onclick = closeForm;
 $('sheet').onclick = ev => { if (ev.target.id === 'sheet') closeForm(); };
 $('fab').onclick = () => openForm(null);
+
+/* date (dd/mm/yyyy, no future) + which report the expense goes to */
+function setFormDate(iso, keepPeriod) { F.date = iso; $('fDateBtn').textContent = fmtDate(iso); updPeriodChoice(keepPeriod); }
+function updPeriodChoice(keep) {
+  const nat = periodKeyFor(F.date), cur = currentPeriod(), wrap = $('fPeriodWrap');
+  if (nat >= cur && (!keep || keep === nat)) { wrap.classList.add('hidden'); return; }
+  const opts = [[cur, `דוח נוכחי – ${periodLabel(cur)} (הוצאה מאוחרת)`]];
+  if (nat < cur && !S.sentReports[nat]) opts.push([nat, `דוח ${periodLabel(nat)} (לפי התאריך)`]);
+  if (keep && !opts.some(o => o[0] === keep)) opts.push([keep, `דוח ${periodLabel(keep)}${S.sentReports[keep] ? ' – נשלח' : ''}`]);
+  $('fPeriod').innerHTML = opts.map(o => `<option value="${o[0]}">${esc(o[1])}</option>`).join('');
+  $('fPeriod').value = keep && opts.some(o => o[0] === keep) ? keep : cur;
+  wrap.classList.remove('hidden');
+}
+const CAL = {y: 0, m: 0};
+function openCal() {
+  [CAL.y, CAL.m] = F.date.split('-').map(Number);
+  renderCal(); $('calDlg').classList.add('on'); pushLayer('cal', () => $('calDlg').classList.remove('on'));
+}
+function renderCal() {
+  const t = todayISO(), [ty, tm] = t.split('-').map(Number);
+  $('calTitle').textContent = `${HEB_MONTHS[CAL.m - 1]} ${CAL.y}`;
+  $('calNext').disabled = CAL.y > ty || (CAL.y === ty && CAL.m >= tm);
+  const first = new Date(CAL.y, CAL.m - 1, 1).getDay(), days = new Date(CAL.y, CAL.m, 0).getDate();
+  let h = ['א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ש'].map(d => `<div class="cdh">${d}</div>`).join('');
+  h += '<div></div>'.repeat(first);
+  for (let d = 1; d <= days; d++) {
+    const iso = `${CAL.y}-${pad(CAL.m)}-${pad(d)}`;
+    h += `<button class="cd${iso === F.date ? ' sel' : ''}${iso === t ? ' today' : ''}" data-d="${iso}" ${iso > t ? 'disabled' : ''}>${d}</button>`;
+  }
+  $('calGrid').innerHTML = h;
+  $('calGrid').querySelectorAll('.cd').forEach(b => b.onclick = () => { setFormDate(b.dataset.d); closeLayer('cal'); });
+}
+$('fDateBtn').onclick = openCal;
+$('calPrev').onclick = () => { if (--CAL.m < 1) { CAL.m = 12; CAL.y--; } renderCal(); };
+$('calNext').onclick = () => { if (++CAL.m > 12) { CAL.m = 1; CAL.y++; } renderCal(); };
+$('calToday').onclick = () => { setFormDate(todayISO()); closeLayer('cal'); };
+$('calYest').onclick = () => { const d = new Date(Date.now() - 864e5); setFormDate(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); closeLayer('cal'); };
+$('calDlg').onclick = ev => { if (ev.target.id === 'calDlg') closeLayer('cal'); };
 
 function onCatChange() {
   const ash = !!catByName($('fCat').value)?.ashal;
@@ -244,8 +311,8 @@ async function addReceiptFiles(fileList, input) {
       if (f.type === 'application/pdf') F.receipts.push({id: uid(), blob: f, type: 'application/pdf', isNew: true});
       else if (f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name)) {
         const orig = await normalizeOrig(f);
-        const edit = {quad: null, rot: 0, mode};
-        if (mode !== 'none') { const c = await blobCanvas(orig); edit.quad = ImgProc.detect(c); }
+        const edit = {rot: 0, angle: 0, crop: null, mode};
+        if (mode !== 'none') { const a = ImgProc.auto(await blobCanvas(orig, 1200)); if (a) Object.assign(edit, a); }
         const blob = await renderReceipt(orig, edit);
         F.receipts.push({id: uid(), blob, orig, edit, type: 'image/jpeg', isNew: true});
       }
@@ -256,6 +323,7 @@ async function addReceiptFiles(fileList, input) {
   if (last && last.orig && last.isNew && files.length === 1) openViewer(F.receipts.length - 1); // let the user check / fix the crop right away
 }
 
+function normEdit(e) { e = e || {}; return {rot: e.rot || 0, angle: e.angle || 0, crop: e.crop || null, mode: e.mode || 'none'}; }
 async function loadBitmap(blob) {
   try { return await createImageBitmap(blob, {imageOrientation: 'from-image'}); }
   catch {
@@ -273,8 +341,8 @@ const canvasBlob = (c, type = 'image/jpeg', q = 0.85) => new Promise(res => c.to
 async function normalizeOrig(file) { return canvasBlob(await blobCanvas(file, 2400), 'image/jpeg', 0.9); } // upright, size-capped original kept for re-editing
 async function renderReceipt(orig, edit) {
   let c = await blobCanvas(orig, 2400);
-  if (edit.quad && !ImgProc.isFull(edit.quad, c.width, c.height)) c = ImgProc.warp(c, edit.quad);
-  c = ImgProc.rotate(c, edit.rot || 0);
+  c = ImgProc.rotateAny(c, (edit.rot || 0) + (edit.angle || 0));
+  c = ImgProc.crop(c, edit.crop);
   const k = Math.min(1, 1800 / Math.max(c.width, c.height));
   if (k < 1) { const s = ImgProc.mkCanvas(Math.round(c.width * k), Math.round(c.height * k)); const x = s.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(c, 0, 0, s.width, s.height); c = s; }
   c = ImgProc.enhance(c, edit.mode);
@@ -300,13 +368,14 @@ const V = {i: -1, readonly: false, s: 1, tx: 0, ty: 0, fit: null, ptrs: new Map(
 function vRec() { return V.readonly ? V.ro : F.receipts[V.i]; }
 async function openViewer(i, ro) {
   V.readonly = !!ro; V.ro = ro || null; V.i = i;
-  $('viewer').classList.add('on');
+  $('viewer').classList.add('on'); pushLayer('viewer', hideViewer);
   $('vTools').classList.toggle('hidden', V.readonly);
   $('vModes').classList.toggle('hidden', V.readonly || !vRec().orig);
   $('vCropBar').classList.add('hidden'); $('vCrop').classList.add('hidden'); $('vStage').classList.remove('hidden');
   syncModes(); await vShow();
 }
-function closeViewer() { $('viewer').classList.remove('on'); if (!V.readonly) renderFormReceipts(); }
+function hideViewer() { $('viewer').classList.remove('on'); if (!V.readonly && F) renderFormReceipts(); }
+function closeViewer() { if (!closeLayer('viewer')) hideViewer(); }
 function syncModes() {
   const r = vRec(); const m = r?.edit?.mode || 'none';
   document.querySelectorAll('#vModes button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
@@ -385,81 +454,115 @@ $('vRotBtn').onclick = async () => { const r = vRec(); r.edit.rot = ((r.edit.rot
 $('vDelBtn').onclick = () => { const r = F.receipts.splice(V.i, 1)[0]; if (r && !r.isNew) F.removed.push(r.id); closeViewer(); };
 $('vDone').onclick = closeViewer;
 
-/* crop & align: drag 4 corners on the original photo */
-const C = {quad: null, scale: 1, drag: -1, img: null};
+/* crop (right angles only) + straighten by rotating the photo */
+const C = {base: null, prev: null, crop: null, rot: 0, angle: 0, scale: 1, off: [0, 0], drag: null};
 async function openCrop() {
   const r = vRec(); spin(true, 'טוען…');
-  const c = await blobCanvas(r.orig, 2400); spin(false);
-  C.img = c;
-  const area = $('vCrop'); area.classList.remove('hidden'); $('vStage').classList.add('hidden');
+  C.base = await blobCanvas(r.orig, 1400); spin(false);
+  C.rot = r.edit.rot || 0; C.angle = r.edit.angle || 0;
+  C.crop = r.edit.crop ? {...r.edit.crop} : {x: 0, y: 0, w: 1, h: 1};
+  $('vCrop').classList.remove('hidden'); $('vStage').classList.add('hidden');
   $('vTools').classList.add('hidden'); $('vModes').classList.add('hidden'); $('vCropBar').classList.remove('hidden');
-  const box = area.getBoundingClientRect(), pad = 22;
-  C.scale = Math.min((box.width - 2 * pad) / c.width, (box.height - 2 * pad) / c.height);
-  const w = c.width * C.scale, h = c.height * C.scale, l = (box.width - w) / 2, t = (box.height - h) / 2;
+  $('cAngle').value = C.angle; $('cAngleVal').textContent = C.angle.toFixed(1) + '°';
+  pushLayer('crop', hideCrop);
+  cropPreview();
+}
+function cropPreview() {
+  C.prev = ImgProc.rotateAny(C.base, C.rot + C.angle);
+  const area = $('vCrop').getBoundingClientRect(), pad = 24;
+  C.scale = Math.min((area.width - 2 * pad) / C.prev.width, (area.height - 2 * pad) / C.prev.height);
+  const w = C.prev.width * C.scale, h = C.prev.height * C.scale;
+  C.off = [(area.width - w) / 2, (area.height - h) / 2];
   const cv = $('cBase'); cv.width = Math.round(w * devicePixelRatio); cv.height = Math.round(h * devicePixelRatio);
-  Object.assign(cv.style, {width: w + 'px', height: h + 'px', left: l + 'px', top: t + 'px'});
-  cv.getContext('2d').drawImage(c, 0, 0, cv.width, cv.height);
-  C.off = [l, t];
-  const svg = $('cSvg'); svg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
-  C.quad = (r.edit.quad && r.edit.quad.map(p => [...p])) || ImgProc.fullQuad(c.width, c.height);
+  Object.assign(cv.style, {width: w + 'px', height: h + 'px', left: C.off[0] + 'px', top: C.off[1] + 'px'});
+  const x = cv.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(C.prev, 0, 0, cv.width, cv.height);
+  $('cSvg').setAttribute('viewBox', `0 0 ${area.width} ${area.height}`);
   drawCrop();
 }
+function cropRectPx() {
+  const w = C.prev.width * C.scale, h = C.prev.height * C.scale;
+  return {x: C.off[0] + C.crop.x * w, y: C.off[1] + C.crop.y * h, w: C.crop.w * w, h: C.crop.h * h};
+}
 function drawCrop(active = -1) {
-  const pts = C.quad.map(p => [C.off[0] + p[0] * C.scale, C.off[1] + p[1] * C.scale]);
-  const box = $('vCrop').getBoundingClientRect();
-  $('cSvg').innerHTML = `<path d="M0 0H${box.width}V${box.height}H0Z M${pts.map(p => p.join(' ')).join(' L')}Z" fill="rgba(0,0,0,.55)" fill-rule="evenodd"/>
-    <polygon points="${pts.map(p => p.join(',')).join(' ')}" fill="none" stroke="#4fc3f7" stroke-width="2"/>
+  const r = cropRectPx(), area = $('vCrop').getBoundingClientRect();
+  const pts = [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
+  const grid = [1, 2].map(i => `<line x1="${r.x + r.w * i / 3}" y1="${r.y}" x2="${r.x + r.w * i / 3}" y2="${r.y + r.h}"/><line x1="${r.x}" y1="${r.y + r.h * i / 3}" x2="${r.x + r.w}" y2="${r.y + r.h * i / 3}"/>`).join('');
+  $('cSvg').innerHTML = `<path d="M0 0H${area.width}V${area.height}H0Z M${r.x} ${r.y}H${r.x + r.w}V${r.y + r.h}H${r.x}Z" fill="rgba(0,0,0,.55)" fill-rule="evenodd"/>
+    <g stroke="rgba(255,255,255,.35)" stroke-width="1">${grid}</g>
+    <rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="none" stroke="#4fc3f7" stroke-width="2"/>
     ${pts.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="${i === active ? 16 : 13}" fill="rgba(79,195,247,.35)" stroke="#fff" stroke-width="3"/>`).join('')}`;
 }
-function loupe(i) {
-  const lp = $('cLoupe'); if (i < 0) { lp.classList.add('hidden'); return; }
+function loupe(pt) {
+  const lp = $('cLoupe'); if (!pt) { lp.classList.add('hidden'); return; }
   lp.classList.remove('hidden');
-  const S2 = 120, z = 3 / C.scale, [x, y] = C.quad[i], x2 = lp.getContext('2d');
-  lp.width = lp.height = S2 * devicePixelRatio;
-  const src = S2 / (C.scale * 3); // source px shown
-  x2.drawImage(C.img, x - src / 2, y - src / 2, src, src, 0, 0, lp.width, lp.height);
+  const S2 = 120; lp.width = lp.height = S2 * devicePixelRatio;
+  const sx = (pt[0] - C.off[0]) / C.scale, sy = (pt[1] - C.off[1]) / C.scale, src = S2 / (C.scale * 3);
+  const x2 = lp.getContext('2d'); x2.fillStyle = '#000'; x2.fillRect(0, 0, lp.width, lp.height);
+  x2.drawImage(C.prev, sx - src / 2, sy - src / 2, src, src, 0, 0, lp.width, lp.height);
   x2.strokeStyle = '#4fc3f7'; x2.lineWidth = 2 * devicePixelRatio;
   x2.beginPath(); x2.moveTo(lp.width / 2, 0); x2.lineTo(lp.width / 2, lp.height); x2.moveTo(0, lp.height / 2); x2.lineTo(lp.width, lp.height / 2); x2.stroke();
-  // keep the loupe away from the finger
-  const box = $('vCrop').getBoundingClientRect(), px = C.off[0] + x * C.scale;
-  lp.style.left = (px < box.width / 2 ? box.width - S2 - 12 : 12) + 'px';
+  const area = $('vCrop').getBoundingClientRect();
+  lp.style.left = (pt[0] < area.width / 2 ? area.width - S2 - 12 : 12) + 'px';
 }
 (function cropGestures() {
   const svg = $('cSvg');
   const loc = e => { const r = $('vCrop').getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   svg.addEventListener('pointerdown', e => {
-    const [x, y] = loc(e);
+    const [x, y] = loc(e), r = cropRectPx();
+    const pts = [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
     let best = -1, bd = 44;
-    C.quad.forEach((p, i) => { const d = Math.hypot(C.off[0] + p[0] * C.scale - x, C.off[1] + p[1] * C.scale - y); if (d < bd) { bd = d; best = i; } });
-    if (best < 0) return;
-    C.drag = best; svg.setPointerCapture(e.pointerId); drawCrop(best); loupe(best);
+    pts.forEach((p, i) => { const d = Math.hypot(p[0] - x, p[1] - y); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0) C.drag = {corner: best};
+    else if (x > r.x && x < r.x + r.w && y > r.y && y < r.y + r.h) C.drag = {move: [x, y], start: {...C.crop}};
+    else return;
+    svg.setPointerCapture(e.pointerId); drawCrop(best); if (best >= 0) loupe(pts[best]);
   });
   svg.addEventListener('pointermove', e => {
-    if (C.drag < 0) return;
-    const [x, y] = loc(e);
-    C.quad[C.drag] = [Math.min(C.img.width, Math.max(0, (x - C.off[0]) / C.scale)), Math.min(C.img.height, Math.max(0, (y - C.off[1]) / C.scale))];
-    drawCrop(C.drag); loupe(C.drag);
+    if (!C.drag) return;
+    const [x, y] = loc(e), W = C.prev.width * C.scale, H = C.prev.height * C.scale, MIN = 0.05;
+    const nx = Math.min(1, Math.max(0, (x - C.off[0]) / W)), ny = Math.min(1, Math.max(0, (y - C.off[1]) / H));
+    const c = C.crop;
+    if (C.drag.move) {
+      const s = C.drag.start;
+      c.x = Math.min(1 - s.w, Math.max(0, s.x + (x - C.drag.move[0]) / W));
+      c.y = Math.min(1 - s.h, Math.max(0, s.y + (y - C.drag.move[1]) / H));
+      drawCrop(); return;
+    }
+    let x0 = c.x, y0 = c.y, x1 = c.x + c.w, y1 = c.y + c.h;
+    const k = C.drag.corner;
+    if (k === 0 || k === 3) x0 = Math.min(nx, x1 - MIN); else x1 = Math.max(nx, x0 + MIN);
+    if (k === 0 || k === 1) y0 = Math.min(ny, y1 - MIN); else y1 = Math.max(ny, y0 + MIN);
+    Object.assign(c, {x: x0, y: y0, w: x1 - x0, h: y1 - y0});
+    drawCrop(k); const r = cropRectPx(); loupe([[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]][k]);
   });
-  const up = () => { C.drag = -1; drawCrop(); loupe(-1); };
+  const up = () => { C.drag = null; drawCrop(); loupe(null); };
   svg.addEventListener('pointerup', up); svg.addEventListener('pointercancel', up);
 })();
-function closeCrop() {
-  $('vCrop').classList.add('hidden'); $('vStage').classList.remove('hidden'); $('vCropBar').classList.add('hidden');
-  $('vTools').classList.remove('hidden'); $('vModes').classList.toggle('hidden', !vRec().orig); vFit();
+$('cAngle').oninput = () => { C.angle = Number($('cAngle').value); $('cAngleVal').textContent = C.angle.toFixed(1) + '°'; cropPreview(); };
+$('cAngleMinus').onclick = () => { $('cAngle').value = Math.max(-45, C.angle - 0.5); $('cAngle').oninput(); };
+$('cAnglePlus').onclick = () => { $('cAngle').value = Math.min(45, C.angle + 0.5); $('cAngle').oninput(); };
+$('cRot90').onclick = () => { C.rot = (C.rot + 90) % 360; C.crop = {x: 0, y: 0, w: 1, h: 1}; cropPreview(); };
+$('cAuto').onclick = () => {
+  const a = ImgProc.auto(ImgProc.rotate(C.base, C.rot)); // detect on the 90°-oriented photo
+  if (!a) return toast('לא זוהה מסמך – כוון ידנית');
+  C.angle = a.angle; C.crop = a.crop; $('cAngle').value = C.angle; $('cAngleVal').textContent = C.angle.toFixed(1) + '°'; cropPreview();
+};
+$('cFull').onclick = () => { C.crop = {x: 0, y: 0, w: 1, h: 1}; C.angle = 0; $('cAngle').value = 0; $('cAngleVal').textContent = '0.0°'; cropPreview(); };
+function hideCrop() {
+  $('vCrop').classList.add('hidden'); $('vStage').classList.remove('hidden'); $('vCropBar').classList.add('hidden'); loupe(null);
+  $('vTools').classList.remove('hidden'); $('vModes').classList.toggle('hidden', !vRec()?.orig); vFit();
 }
 $('vCropBtn').onclick = openCrop;
-$('cAuto').onclick = () => { const q = ImgProc.detect(C.img); if (q) { C.quad = q; drawCrop(); } else toast('לא זוהה מסמך – גרור את הפינות ידנית'); };
-$('cFull').onclick = () => { C.quad = ImgProc.fullQuad(C.img.width, C.img.height); drawCrop(); };
-$('cCancel').onclick = closeCrop;
+$('cCancel').onclick = () => closeLayer('crop');
 $('cOk').onclick = async () => {
-  const r = vRec();
-  r.edit.quad = ImgProc.isFull(C.quad, C.img.width, C.img.height) ? null : C.quad;
-  closeCrop(); await vReprocess();
+  const r = vRec(), full = C.crop.x < 0.005 && C.crop.y < 0.005 && C.crop.w > 0.99 && C.crop.h > 0.99;
+  r.edit.rot = C.rot; r.edit.angle = C.angle; r.edit.crop = full ? null : {...C.crop};
+  closeLayer('crop'); await vReprocess();
 };
 
 $('fSave').onclick = async () => {
   const cat = $('fCat').value; const ash = !!catByName(cat)?.ashal;
-  const date = $('fDate').value;
+  const date = F.date;
   if (!date) return toast('יש לבחור תאריך');
   let amount, hours = null;
   if (ash) {
@@ -472,7 +575,7 @@ $('fSave').onclick = async () => {
   }
   const old = F.id ? EXP.find(e => e.id === F.id) : null;
   const rec = {
-    id: F.id || uid(), date, period: periodKeyFor(date), category: cat, ashal: ash,
+    id: F.id || uid(), date, period: $('fPeriodWrap').classList.contains('hidden') ? periodKeyFor(date) : $('fPeriod').value, category: cat, ashal: ash,
     amount: Math.round(amount * 100) / 100, hours, description: $('fDesc').value.trim(),
     receipts: ash ? [] : F.receipts.map(r => r.id), createdAt: old?.createdAt || Date.now(), updatedAt: Date.now()
   };
@@ -481,8 +584,7 @@ $('fSave').onclick = async () => {
   for (const id of removed) await DB.del('files', id);
   await DB.put('expenses', rec);
   await loadExpenses();
-  const msg = rec.period !== currentPeriod() && date > periodRange(currentPeriod()).end
-    ? `נשמר – ייכנס לדוח ${periodLabel(rec.period)}` : (!ash && !rec.receipts.length ? 'נשמר (ללא קבלה)' : 'נשמר ✓');
+  const msg = rec.period !== currentPeriod() ? `נשמר – בדוח ${periodLabel(rec.period)}` : (!ash && !rec.receipts.length ? 'נשמר (ללא קבלה)' : 'נשמר ✓');
   closeForm(); listKey = rec.period; renderExpenses(); toast(msg);
 };
 $('fDelete').onclick = async () => {
@@ -564,7 +666,7 @@ async function openReview() {
   </div>
   <div class="card" style="overflow-x:auto">
     <table class="rep"><thead><tr><th># חשבונית</th><th>תאריך</th><th>סוג</th><th>תיאור</th><th>סכום</th></tr></thead><tbody>
-    ${items.map(e => `<tr><td>${e.receipts?.length ? e.index : '<b style="color:var(--bad)">חסרה</b>'}</td><td>${fmtDate(e.date)}</td><td>${esc(e.category)}</td><td>${esc(e.description)}</td><td>${num2(e.amount)}</td></tr>`).join('')}
+    ${items.map(e => `<tr><td>${e.receipts?.length ? e.index : '<b style="color:var(--bad)">חסרה</b>'}</td><td>${fmtDate(e.date)}${periodKeyFor(e.date) !== e.period ? ' <span class="tag warn">מאוחרת</span>' : ''}</td><td>${esc(e.category)}</td><td>${esc(e.description)}</td><td>${num2(e.amount)}</td></tr>`).join('')}
     </tbody><tfoot><tr><td colspan="4">סה"כ</td><td>${num2(total)}</td></tr></tfoot></table>
     <div class="row" style="margin-top:6px">
       <div><label>מקדמות (₪, אם יש)</label><input id="rvAdv" type="number" inputmode="decimal" placeholder="0"></div>
@@ -594,10 +696,12 @@ async function openReview() {
     spin(false);
   };
   $('rvSign').onclick = () => signAndPrepare();
+  if (!$('review').classList.contains('on')) pushLayer('review', hideReview);
   $('review').classList.add('on'); $('review').scrollTop = 0;
 }
 $('btnReview').onclick = openReview;
-$('rvClose').onclick = () => { $('review').classList.remove('on'); renderReport(); };
+function hideReview() { $('review').classList.remove('on'); renderReport(); }
+$('rvClose').onclick = () => { if (!closeLayer('review')) hideReview(); };
 
 function fileNames(key) {
   const n = (S.name || 'עובד').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '_');
@@ -723,7 +827,7 @@ function renderSend() {
   $('markSent').onclick = async () => {
     const items = reportItems(OUT.key);
     S.sentReports[OUT.key] = {sentAt: Date.now(), total: items.reduce((s, e) => s + Number(e.amount), 0), count: items.length};
-    await saveSettingsObj(); $('review').classList.remove('on'); show('report'); toast('הדוח סומן כנשלח ✓');
+    await saveSettingsObj(); if (!closeLayer('review')) hideReview(); toast('הדוח סומן כנשלח ✓');
   };
 }
 
@@ -834,15 +938,15 @@ async function cleanSignature(blob) {
   cv.onpointerdown = e => { drawing = true; dirty = true; cv.setPointerCapture(e.pointerId); ctx.beginPath(); ctx.moveTo(...pos(e)); };
   cv.onpointermove = e => { if (!drawing) return; ctx.lineTo(...pos(e)); ctx.stroke(); };
   cv.onpointerup = cv.onpointercancel = () => { drawing = false; };
-  $('btnSigDraw').onclick = () => { $('sigSheet').classList.add('on'); requestAnimationFrame(setup); };
-  $('sigClose').onclick = () => $('sigSheet').classList.remove('on');
+  $('btnSigDraw').onclick = () => { $('sigSheet').classList.add('on'); pushLayer('sig', () => $('sigSheet').classList.remove('on')); requestAnimationFrame(setup); };
+  $('sigClose').onclick = () => { if (!closeLayer('sig')) $('sigSheet').classList.remove('on'); };
   $('sigClear').onclick = setup;
   $('sigSave').onclick = async () => {
     if (!dirty) return toast('יש לחתום קודם');
     const raw = await new Promise(res => cv.toBlob(res, 'image/png'));
     const png = await cleanSignature(raw);
     await DB.put('files', {id: 'signature', blob: png, type: 'image/png'});
-    $('sigSheet').classList.remove('on'); renderSigTpl(); toast('החתימה נשמרה');
+    if (!closeLayer('sig')) $('sigSheet').classList.remove('on'); renderSigTpl(); toast('החתימה נשמרה');
   };
 })();
 
@@ -894,6 +998,7 @@ $('btnIcs').onclick = () => {
 /* ---------------- boot ---------------- */
 (async function boot() {
   try {
+    history.replaceState({base: 1}, ''); history.pushState({guard: 1}, '');
     await DB.open(); await loadSettings(); await loadExpenses();
     try { await navigator.storage?.persist?.(); } catch {}
     renderExpenses();

@@ -100,6 +100,18 @@ canvas#sigpad{width:100%;height:180px;background:#fff;border:1px solid var(--lin
 .vbar button.on{background:var(--pri2)}
 .vbar button:disabled{opacity:.4}
 .gallery div{cursor:pointer}
+.datebtn{width:100%;font-size:16px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);font-family:inherit;text-align:right;direction:ltr;text-align:right}
+.dlg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:45;display:none;align-items:center;justify-content:center;padding:16px}
+.dlg.on{display:flex}
+.dlgbox{background:#fff;border-radius:16px;padding:14px;width:100%;max-width:380px}
+.calhead{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:8px}
+.calhead .btn{padding:8px 10px;font-size:13px}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.cdh{text-align:center;font-size:12px;color:var(--muted);padding:4px 0}
+.cd{border:0;background:#f1f4f8;border-radius:10px;padding:10px 0;font-size:15px;font-family:inherit;color:var(--ink)}
+.cd.today{outline:2px solid var(--pri2)}
+.cd.sel{background:var(--pri);color:#fff}
+.cd:disabled{opacity:.3}
 code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;direction:ltr;display:inline-block}
 </style>
 </head>
@@ -221,9 +233,10 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
     <label>סוג הוצאה</label>
     <select id="fCat"></select>
     <div class="row">
-      <div><label>תאריך</label><input id="fDate" type="date"></div>
+      <div><label>תאריך</label><button type="button" class="datebtn" id="fDateBtn"></button></div>
       <div id="fAmountWrap"><label>סכום (₪)</label><input id="fAmount" type="number" inputmode="decimal" step="0.01" placeholder="0.00"></div>
     </div>
+    <div id="fPeriodWrap" class="hidden"><label>שייך לדוח</label><select id="fPeriod"></select></div>
     <div class="ashal hidden" id="fAshal">
       <div class="row">
         <div><label>שעות</label><input id="fHours" type="number" inputmode="decimal" step="0.5"></div>
@@ -282,8 +295,32 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
   <div class="vbar" id="vTools">
     <button id="vCropBtn">✂️ חיתוך ויישור</button><button id="vRotBtn">⟳ סיבוב</button><button id="vDelBtn" style="color:#ff8a80">🗑 מחיקה</button>
   </div>
-  <div class="vbar hidden" id="vCropBar">
-    <button id="cCancel">ביטול</button><button id="cAuto">🔍 זיהוי אוטומטי</button><button id="cFull">כל התמונה</button><button id="cOk" class="on">✓ אישור</button>
+  <div class="hidden" id="vCropBar">
+    <div class="vbar" style="align-items:center" dir="ltr">
+      <button id="cAngleMinus" style="flex:0 0 44px">−</button>
+      <input type="range" id="cAngle" min="-45" max="45" step="0.5" value="0" style="flex:1;padding:0">
+      <button id="cAnglePlus" style="flex:0 0 44px">+</button>
+      <span id="cAngleVal" style="flex:0 0 54px;text-align:center;font-size:14px">0.0°</span>
+    </div>
+    <div class="vbar"><button id="cRot90">⟳ 90°</button><button id="cAuto">🔍 אוטומטי</button><button id="cFull">איפוס</button></div>
+    <div class="vbar"><button id="cCancel">ביטול</button><button id="cOk" class="on">✓ אישור</button></div>
+  </div>
+</div>
+
+<!-- CALENDAR -->
+<div class="dlg" id="calDlg">
+  <div class="dlgbox">
+    <div class="calhead"><button id="calPrev" class="btn sec">› חודש קודם</button><b id="calTitle"></b><button id="calNext" class="btn sec">חודש הבא ‹</button></div>
+    <div class="calgrid" id="calGrid"></div>
+    <div class="row" style="margin-top:10px"><button class="btn sec" id="calYest">אתמול</button><button class="btn" id="calToday">היום</button></div>
+  </div>
+</div>
+
+<!-- EXIT CONFIRM -->
+<div class="dlg" id="exitDlg">
+  <div class="dlgbox" style="text-align:center">
+    <div style="font-size:17px;font-weight:700;margin:6px 0 14px">לצאת מהאפליקציה?</div>
+    <div class="row"><button class="btn sec" id="exitStay">ביטול</button><button class="btn" id="exitGo">יציאה</button></div>
   </div>
 </div>
 
