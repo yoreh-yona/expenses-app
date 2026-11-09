@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -304,7 +304,7 @@ $('pickInput').onchange = ev => addReceiptFiles(ev.target.files, ev.target);
 
 async function addReceiptFiles(fileList, input) {
   const files = [...fileList];
-  spin(true, 'מעבד תמונה…');
+  spin(true, 'מעבד תמונה…'); await nextFrame();
   const mode = $('fScanMode').value; S.scanMode = mode; saveSettingsObj();
   try {
     for (const f of files) {
@@ -337,7 +337,13 @@ async function blobCanvas(blob, max = 2400) {
   const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(bmp, 0, 0, c.width, c.height);
   return c;
 }
-const canvasBlob = (c, type = 'image/jpeg', q = 0.85) => new Promise(res => c.toBlob(res, type, q));
+// toDataURL instead of toBlob: Chrome on Android encodes toBlob in idle time and can stall until the next tap
+function canvasBlob(c, type = 'image/jpeg', q = 0.85) {
+  const url = c.toDataURL(type, q), bin = atob(url.slice(url.indexOf(',') + 1)), a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return Promise.resolve(new Blob([a], {type}));
+}
+const nextFrame = () => new Promise(r => setTimeout(r, 40)); // let the spinner paint before heavy work
 async function normalizeOrig(file) { return canvasBlob(await blobCanvas(file, 2400), 'image/jpeg', 0.9); } // upright, size-capped original kept for re-editing
 async function renderReceipt(orig, edit) {
   let c = await blobCanvas(orig, 2400);
@@ -383,7 +389,7 @@ function syncModes() {
 }
 async function vShow() {
   const img = $('vImg'); const r = vRec();
-  await new Promise(res => { img.onload = res; img.onerror = res; img.src = URL.createObjectURL(r.blob); });
+  await new Promise(res => { img.onload = res; img.onerror = res; img.src = URL.createObjectURL(r.blob); setTimeout(res, 1500); });
   vFit();
 }
 function vFit() {
@@ -438,7 +444,7 @@ function vZoomAt(mx, my, s) {
   window.addEventListener('resize', () => { if ($('viewer').classList.contains('on') && !$('vStage').classList.contains('hidden')) vFit(); });
 })();
 async function vReprocess() {
-  const r = vRec(); spin(true, 'מעבד…');
+  const r = vRec(); spin(true, 'מעבד…'); await nextFrame();
   try {
     r.blob = await renderReceipt(r.orig, r.edit);
     if (!r.isNew) { F.removed.push(r.id); r.id = uid(); r.isNew = true; }
@@ -925,7 +931,7 @@ async function cleanSignature(blob) {
   const m = 10; minX = Math.max(0, minX - m); minY = Math.max(0, minY - m); maxX = Math.min(W - 1, maxX + m); maxY = Math.min(H - 1, maxY + m);
   const o = document.createElement('canvas'); o.width = maxX - minX + 1; o.height = maxY - minY + 1;
   o.getContext('2d').drawImage(c, minX, minY, o.width, o.height, 0, 0, o.width, o.height);
-  return await new Promise(res => o.toBlob(res, 'image/png'));
+  return canvasBlob(o, 'image/png');
 }
 (function sigPad() {
   const cv = $('sigpad'); let ctx, drawing = false, dirty = false;
@@ -943,7 +949,7 @@ async function cleanSignature(blob) {
   $('sigClear').onclick = setup;
   $('sigSave').onclick = async () => {
     if (!dirty) return toast('יש לחתום קודם');
-    const raw = await new Promise(res => cv.toBlob(res, 'image/png'));
+    const raw = await canvasBlob(cv, 'image/png');
     const png = await cleanSignature(raw);
     await DB.put('files', {id: 'signature', blob: png, type: 'image/png'});
     if (!closeLayer('sig')) $('sigSheet').classList.remove('on'); renderSigTpl(); toast('החתימה נשמרה');
