@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -1010,5 +1010,9 @@ $('btnIcs').onclick = () => {
     renderExpenses();
     if (!S.name) setTimeout(() => toast('ברוך הבא! התחל בהגדרות: שם, מייל הנה"ח וחתימה', 4500), 400);
   } catch (err) { console.error(err); document.body.insertAdjacentHTML('afterbegin', `<div class="banner">שגיאה בטעינת האחסון: ${esc(err.message)}</div>`); }
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(r => r.update()).catch(() => {});
+    let reloaded = false; // a new version took over: reload once so its code runs
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !LAYERS.length) { reloaded = true; location.reload(); } });
+  }
 })();
