@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '2.1.0';
+const VERSION = '2.1.1';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -1018,7 +1018,7 @@ $('restoreFile').onchange = async ev => {
     for (const e of data.expenses) await DB.put('expenses', e);
     for (const x of data.files) await DB.put('files', {id: x.id, type: x.type, name: x.name, blob: new Blob([unb64(x.data)], {type: x.type}), orig: x.orig ? new Blob([unb64(x.orig)], {type: 'image/jpeg'}) : null, edit: x.edit || null});
     S = Object.assign(structuredClone(DEFAULT_SETTINGS), data.settings); await saveSettingsObj();
-    urlCache.clear(); await loadExpenses(); renderSettings(); toast(`שוחזרו ${data.expenses.length} הוצאות`);
+    urlCache.clear(); await loadExpenses(); renderSettings(); renderExpenses(); scheduleLocalNags(); toast(`שוחזרו ${data.expenses.length} הוצאות`);
   } catch (err) { console.error(err); alert('השחזור נכשל: ' + err.message); }
   spin(false);
 };
