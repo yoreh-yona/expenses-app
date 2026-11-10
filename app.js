@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '2.1.2';
+const VERSION = '2.2.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -721,7 +721,7 @@ $('rvClose').onclick = () => { if (!closeLayer('review')) hideReview(); };
 
 function fileNames(key) {
   const n = (S.name || 'עובד').replace(/[\\/:*?"<>|]/g, '').trim().replace(/\s+/g, '_');
-  return {xlsx: `דוח_הוצאות_${n}_${key}.xlsx`, draft: `טיוטה_דוח_הוצאות_${key}.xlsx`, pdf: `קבלות_${n}_${key}.pdf`};
+  return {report: `דוח_הוצאות_${n}_${key}.pdf`, xlsx: `דוח_הוצאות_${n}_${key}.xlsx`, draft: `טיוטה_דוח_הוצאות_${key}.xlsx`, pdf: `קבלות_${n}_${key}.pdf`};
 }
 
 /* ----- XLSX ----- */
@@ -740,6 +740,23 @@ async function previewXlsx(blob, title) {
   const {svg} = await ExpenseXlsx.toSvg(ExcelJS, PizZip, await blob.arrayBuffer());
   await openViewer(-1, {blob: new Blob([svg], {type: 'image/svg+xml'})}, title);
   toast('הגדלה בצביטה או סיבוב הטלפון לרוחב', 3000);
+}
+// signed report as a flat PDF (rendered image of the filled form) – nothing in it can be edited
+async function xlsxToPdf(xlsxBlob, title) {
+  const {svg, width, height} = await ExpenseXlsx.toSvg(ExcelJS, PizZip, await xlsxBlob.arrayBuffer());
+  const img = new Image();
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  await img.decode();
+  const k = 3, c = ImgProc.mkCanvas(Math.round(width * k), Math.round(height * k)), x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.scale(k, k); x.drawImage(img, 0, 0, width, height);
+  const png = await canvasBlob(c, 'image/png');
+  const {PDFDocument} = PDFLib, pdf = await PDFDocument.create();
+  const A4L = [841.89, 595.28], M = 18;
+  const pic = await pdf.embedPng(await png.arrayBuffer());
+  const page = pdf.addPage(A4L), s = Math.min((A4L[0] - 2 * M) / width, (A4L[1] - 2 * M) / height);
+  page.drawImage(pic, {x: (A4L[0] - width * s) / 2, y: A4L[1] - M - height * s, width: width * s, height: height * s});
+  pdf.setTitle(title); pdf.setAuthor(S.name || ''); pdf.setCreator('הוצאות אישיות ' + VERSION); pdf.setProducer('expenses-app');
+  return new Blob([await pdf.save()], {type: 'application/pdf'});
 }
 async function buildXlsx(key, signed) {
   const items = reportItems(key);
@@ -802,7 +819,8 @@ async function signAndPrepare() {
     const names = fileNames(repKey);
     const xlsx = await buildXlsx(repKey, true);
     const pdf = await buildReceiptsPdf(repKey);
-    OUT = {key: repKey, files: [new File([xlsx], names.xlsx, {type: XLSX_MIME})]};
+    const report = await xlsxToPdf(xlsx, `דוח הוצאות – ${S.name} – ${periodLabel(repKey)}`);
+    OUT = {key: repKey, xlsx, files: [new File([report], names.report, {type: 'application/pdf'})]};
     if (pdf) OUT.files.push(new File([pdf], names.pdf, {type: 'application/pdf'}));
   } catch (err) { console.error(err); spin(false); alert('שגיאה: ' + err.message); return; }
   spin(false);
@@ -842,7 +860,7 @@ function renderSend() {
   <button class="btn ok block" id="markSent">✓ סימון הדוח כנשלח</button>`;
   $('sendPreview').onclick = async () => {
     spin(true, 'מכין תצוגה מקדימה…'); await nextFrame();
-    try { await previewXlsx(OUT.files[0], 'הדוח החתום'); } catch (err) { alert(err.message); }
+    try { await previewXlsx(OUT.xlsx, 'הדוח החתום'); } catch (err) { alert(err.message); }
     spin(false);
   };
   $('cpEmail').onclick = async () => { try { await navigator.clipboard.writeText(S.acctEmail); toast('הכתובת הועתקה'); } catch { toast('העתקה נכשלה'); } };
