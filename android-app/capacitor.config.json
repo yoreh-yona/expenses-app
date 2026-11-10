@@ -1,0 +1,9 @@
+{
+  "appId": "com.yorehyona.expenses",
+  "appName": "הוצאות",
+  "webDir": "www",
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_stat_receipt", "iconColor": "#1F4E79" }
+  }
+}

@@ -124,6 +124,7 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
 <main>
   <!-- EXPENSES -->
   <section class="view on" id="view-expenses">
+    <div id="updBanner"></div>
     <div id="remind"></div>
     <div class="card">
       <div class="sum">
@@ -203,7 +204,17 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
       <div id="tierList"></div>
       <button class="btn sec block" id="btnAshalReset">שחזור תעריפי הנוהל</button>
     </div>
-    <div class="card">
+    <div class="card hidden" id="lnagCard">
+      <h2>התראות הגשה 🔔</h2>
+      <div class="muted">מה-25 לחודש בשעה 09:00, בכל כמה שעות עד 21:00 – וגם בימים שאחרי – עד שהדוח מסומן "נשלח". רק לחודש שיש בו הוצאות. ההתראות מתוזמנות בטלפון עצמו.</div>
+      <label style="display:flex;align-items:center;color:var(--ink);font-size:15px;margin-top:10px"><input type="checkbox" id="lnagOn" checked>התראות פעילות</label>
+      <div id="lnagStatus"></div>
+      <label>תדירות</label>
+      <select id="lnagInterval"><option value="1">כל שעה</option><option value="2">כל שעתיים</option><option value="3">כל 3 שעות</option></select>
+      <div class="row" style="margin-top:10px"><button class="btn sec" id="lnagTest">התראת בדיקה</button><button class="btn sec" id="lnagExact">דיוק בשעה ⏰</button></div>
+      <div class="muted" style="margin-top:8px">אם ההתראות מאחרות: הגדרות הטלפון ← אפליקציות ← הוצאות ← סוללה ← "ללא הגבלה".</div>
+    </div>
+    <div class="card" id="nagCard">
       <h2>התראות הגשה 🔔</h2>
       <div class="muted">התראה לטלפון מה-25 לחודש בשעה 09:00, בכל כמה שעות עד 21:00 – ובימים שאחרי – עד שהדוח מסומן "נשלח". רק לחודש שיש בו הוצאות.</div>
       <div id="nagStatus"></div>
@@ -350,6 +361,7 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
 <div class="toast" id="toast"></div>
 <div class="spin" id="spin"><div style="font-size:30px">⏳</div><div id="spinTxt">מכין…</div></div>
 
+<script src="vendor/capacitor.js"></script>
 <script src="vendor/pizzip.min.js"></script>
 <script src="vendor/exceljs.min.js"></script>
 <script src="xlsx-fill.js"></script>

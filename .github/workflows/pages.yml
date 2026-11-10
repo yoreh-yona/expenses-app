@@ -2,6 +2,7 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+    paths-ignore: ['android-app/**', '.github/nag/**', '.github/workflows/android.yml', '.github/workflows/nag.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,8 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Collect web files
+        run: mkdir _site && cp -r index.html app.js imgproc.js xlsx-fill.js sw.js manifest.json .nojekyll vendor icons _site/
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

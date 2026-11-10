@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '1.4.0';
+const VERSION = '2.0.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -87,6 +87,7 @@ async function fileURL(id) {
   const u = URL.createObjectURL(f.blob); urlCache.set(id, u); return u;
 }
 function downloadBlob(blob, name) {
+  if (window.Capacitor?.isNativePlatform?.()) { nativeShare([{blob, name}], name, '').catch(e => toast('השמירה נכשלה')); return; }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
 }
@@ -154,6 +155,7 @@ window.addEventListener('popstate', () => {
 $('exitStay').onclick = () => { $('exitDlg').classList.remove('on'); EXIT_ARMED = false; history.pushState({guard: 1}, ''); };
 $('exitGo').onclick = () => {
   $('exitDlg').classList.remove('on');
+  if (window.Capacitor?.isNativePlatform?.()) { window.capacitorExports.registerPlugin('App').exitApp(); return; }
   try { window.close(); } catch {}
   setTimeout(() => toast('לחץ "חזור" פעם נוספת כדי לצאת', 3000), 150);
   setTimeout(() => { if (EXIT_ARMED) { EXIT_ARMED = false; history.pushState({guard: 1}, ''); } }, 3200);
@@ -589,7 +591,7 @@ $('fSave').onclick = async () => {
   const removed = ash ? [...F.removed, ...F.receipts.filter(r => !r.isNew).map(r => r.id)] : F.removed;
   for (const id of removed) await DB.del('files', id);
   await DB.put('expenses', rec);
-  await loadExpenses(); syncNag();
+  await loadExpenses(); syncNag(); scheduleLocalNags();
   const msg = rec.period !== currentPeriod() ? `נשמר – בדוח ${periodLabel(rec.period)}` : (!ash && !rec.receipts.length ? 'נשמר (ללא קבלה)' : 'נשמר ✓');
   closeForm(); listKey = rec.period; renderExpenses(); toast(msg);
 };
@@ -597,7 +599,7 @@ $('fDelete').onclick = async () => {
   if (!confirm('למחוק את ההוצאה?')) return;
   const e = EXP.find(x => x.id === F.id);
   for (const id of e.receipts || []) await DB.del('files', id);
-  await DB.del('expenses', e.id); await loadExpenses(); syncNag(); closeForm(); renderExpenses(); toast('נמחק');
+  await DB.del('expenses', e.id); await loadExpenses(); syncNag(); scheduleLocalNags(); closeForm(); renderExpenses(); toast('נמחק');
 };
 
 /* ---------------- report ---------------- */
@@ -642,7 +644,7 @@ async function renderReport() {
   $('repStatus').innerHTML = `<div class="muted">${fmtDate(r.start)} – ${fmtDate(r.end)} · הגשה עד ${fmtDate(r.end)}</div>` +
     (sent ? `<div class="banner ok" style="margin:8px 0 0">✓ נשלח ב-${new Date(sent.sentAt).toLocaleDateString('he-IL')} (${money(sent.total)})
       <a href="#" id="unsend">ביטול סימון</a></div>` : '');
-  const un = $('unsend'); if (un) un.onclick = async ev => { ev.preventDefault(); delete S.sentReports[repKey]; await saveSettingsObj(); syncNag(); renderReport(); };
+  const un = $('unsend'); if (un) un.onclick = async ev => { ev.preventDefault(); delete S.sentReports[repKey]; await saveSettingsObj(); syncNag(); scheduleLocalNags(); renderReport(); };
   const sig = await DB.get('files', 'signature');
   const tpl = await DB.get('files', 'template');
   const checks = reportChecks(items);
@@ -802,7 +804,7 @@ function mailText(key) {
 }
 function renderSend() {
   const {subject, body} = mailText(OUT.key);
-  const canShare = !!(navigator.canShare && navigator.canShare({files: OUT.files}));
+  const canShare = NATIVE || !!(navigator.canShare && navigator.canShare({files: OUT.files}));
   const sizeKB = OUT.files.reduce((s, f) => s + f.size, 0) / 1024;
   $('rvTitle').textContent = 'שליחה להנהלת חשבונות';
   $('rvBody').innerHTML = `
@@ -814,26 +816,34 @@ function renderSend() {
       <button class="btn sec" id="cpEmail" style="padding:8px 12px">העתק</button></div>
     <div class="muted">נושא</div><div style="margin:4px 0 10px">${esc(subject)}</div>
     <ol class="steps">
-      ${canShare ? `<li>לחץ "שליחה" ובחר Outlook / Gmail</li><li>המייל נפתח עם הקבצים מצורפים – הדבק את כתובת הנמען (הועתקה)</li><li>שלח, וחזור לכאן לסמן "נשלח"</li>`
+      ${NATIVE ? `<li>לחץ "פתיחת מייל" ובחר Outlook / Gmail – הנמען, הנושא והקבצים כבר בפנים</li><li>שלח, וחזור לכאן לסמן "נשלח"</li>`
+      : canShare ? `<li>לחץ "שליחה" ובחר Outlook / Gmail</li><li>המייל נפתח עם הקבצים מצורפים – הדבק את כתובת הנמען (הועתקה)</li><li>שלח, וחזור לכאן לסמן "נשלח"</li>`
                  : `<li>הורד את הקבצים</li><li>פתח מייל חדש (הכפתור ממלא נמען, נושא וגוף)</li><li>צרף את הקבצים ושלח, וחזור לכאן לסמן "נשלח"</li>`}
     </ol>
-    ${canShare ? `<button class="btn block" id="doShare">📤 שליחה</button>` : ''}
-    <button class="btn ${canShare ? 'sec' : ''} block" id="doDownload">⬇️ הורדת הקבצים</button>
-    <a class="btn sec block" id="doMailto" href="mailto:${encodeURIComponent(S.acctEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}">✉️ פתיחת מייל (נמען + נושא)</a>
+    ${NATIVE ? `<button class="btn block" id="doEmail">✉️ פתיחת מייל עם הקבצים</button>` : ''}
+    ${canShare ? `<button class="btn ${NATIVE ? 'sec' : ''} block" id="doShare">📤 ${NATIVE ? 'שיתוף לאפליקציה אחרת' : 'שליחה'}</button>` : ''}
+    ${NATIVE ? '' : `<button class="btn ${canShare ? 'sec' : ''} block" id="doDownload">⬇️ הורדת הקבצים</button>`}
+    <a class="btn sec block ${NATIVE ? 'hidden' : ''}" id="doMailto" href="mailto:${encodeURIComponent(S.acctEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}">✉️ פתיחת מייל (נמען + נושא)</a>
   </div>
   <button class="btn ok block" id="markSent">✓ סימון הדוח כנשלח</button>`;
   $('cpEmail').onclick = async () => { try { await navigator.clipboard.writeText(S.acctEmail); toast('הכתובת הועתקה'); } catch { toast('העתקה נכשלה'); } };
+  const em = $('doEmail');
+  if (em) em.onclick = async () => { try { await nativeEmail(OUT.files, subject, body); } catch (e) { alert('לא נמצאה אפליקציית מייל: ' + (e.message || e)); } };
   const sh = $('doShare');
-  if (sh) sh.onclick = async () => {
+  if (sh && NATIVE) sh.onclick = async () => {
+    try { await navigator.clipboard.writeText(S.acctEmail); } catch {}
+    try { await nativeShare(OUT.files.map(f => ({blob: f, name: f.name})), subject, body); } catch (e) { if (!/cancel/i.test(String(e.message || e))) toast('השיתוף נכשל'); }
+  };
+  else if (sh) sh.onclick = async () => {
     try { await navigator.clipboard.writeText(S.acctEmail); } catch {}
     try { await navigator.share({files: OUT.files, title: subject, text: body}); toast('הכתובת הועתקה – הדבק בשדה "אל"', 4000); }
     catch (err) { if (err.name !== 'AbortError') toast('השיתוף נכשל – השתמש בהורדה'); }
   };
-  $('doDownload').onclick = () => OUT.files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 600));
+  if ($('doDownload')) $('doDownload').onclick = () => OUT.files.forEach((f, i) => setTimeout(() => downloadBlob(f, f.name), i * 600));
   $('markSent').onclick = async () => {
     const items = reportItems(OUT.key);
     S.sentReports[OUT.key] = {sentAt: Date.now(), total: items.reduce((s, e) => s + Number(e.amount), 0), count: items.length};
-    await saveSettingsObj(); syncNag(true); if (!closeLayer('review')) hideReview(); toast('הדוח סומן כנשלח ✓');
+    await saveSettingsObj(); syncNag(true); scheduleLocalNags(); if (!closeLayer('review')) hideReview(); toast('הדוח סומן כנשלח ✓');
   };
 }
 
@@ -841,7 +851,8 @@ function renderSend() {
 async function renderSettings() {
   $('sName').value = S.name; $('sRole').value = S.role; $('sManager').value = S.manager; $('sCompany').value = S.company;
   $('sAcctEmail').value = S.acctEmail; $('sAcctName').value = S.acctName; $('sNotes').value = S.notes;
-  renderCats(); renderTiers(); renderNag();
+  renderCats(); renderTiers(); renderNag(); renderLnag();
+  $('nagCard').classList.toggle('hidden', NATIVE); $('lnagCard').classList.toggle('hidden', !NATIVE);
   await renderSigTpl();
   try {
     const est = await navigator.storage.estimate(); const p = await navigator.storage.persisted?.();
@@ -1091,6 +1102,109 @@ $('btnNagTest').onclick = async () => {
 };
 navigator.serviceWorker?.addEventListener('message', ev => { if (ev.data?.go === 'report') goTab('report'); });
 
+/* ---------------- Android app (Capacitor) ---------------- */
+const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.capacitorExports);
+const NP = NATIVE ? Object.fromEntries(['LocalNotifications', 'Share', 'Filesystem', 'App', 'EmailComposer']
+  .map(n => [n, window.capacitorExports.registerPlugin(n)])) : {};
+const blobB64 = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+async function nativeShare(files, title, text) { // files: [{blob, name}]
+  const uris = [];
+  for (const f of files) {
+    const safe = f.name.replace(/[\\/:*?"<>|]/g, '_');
+    const w = await NP.Filesystem.writeFile({path: safe, data: await blobB64(f.blob), directory: 'CACHE'});
+    uris.push(w.uri);
+  }
+  await NP.Share.share({title, text, files: uris, dialogTitle: title});
+}
+async function nativeEmail(files, subject, body) {
+  const attachments = [];
+  for (const f of files) attachments.push({type: 'base64', path: await blobB64(f), name: f.name});
+  await NP.EmailComposer.open({to: S.acctEmail ? [S.acctEmail] : [], subject, body, isHtml: false, attachments});
+}
+
+// local reminders: scheduled on the phone itself, no server
+const LN_CHANNEL = 'report-nag';
+async function scheduleLocalNags(force) {
+  if (!NATIVE) return;
+  const cfg = S.lnag || (S.lnag = {on: true, interval: 2});
+  try {
+    const pend = await NP.LocalNotifications.getPending();
+    if (pend.notifications?.length) await NP.LocalNotifications.cancel({notifications: pend.notifications.map(n => ({id: n.id}))});
+    const periods = pendingPeriods();
+    if (!cfg.on || !periods.length) { renderLnag(); return; }
+    let perm = await NP.LocalNotifications.checkPermissions();
+    if (perm.display !== 'granted') perm = await NP.LocalNotifications.requestPermissions();
+    if (perm.display !== 'granted') { cfg.denied = true; renderLnag(); return; }
+    cfg.denied = false;
+    const every = Math.max(1, cfg.interval || 2), now = Date.now(), times = new Map();
+    const [fy, fm] = periods[0].split('-').map(Number);
+    for (let day = 0; day < 60 && times.size < 100; day++) {
+      const hours = day < 7 ? Array.from({length: Math.floor((21 - 9) / every) + 1}, (_, i) => 9 + i * every) : [9];
+      for (const h of hours) {
+        const t = new Date(fy, fm - 1, 25 + day, h, 0, 0);
+        if (t.getTime() > now) times.set(t.getTime(), t);
+      }
+    }
+    const list = [];
+    let id = 1000;
+    for (const t of [...times.values()].sort((a, b) => a - b)) {
+      const due = periods.filter(p => { const [y, m] = p.split('-').map(Number); return t >= new Date(y, m - 1, 25, 9); });
+      if (!due.length) continue;
+      const last = due[due.length - 1], [ly, lm] = last.split('-').map(Number);
+      const onTime = due.length === 1 && t.getFullYear() === ly && t.getMonth() === lm - 1 && t.getDate() === 25;
+      list.push({
+        id: id++, channelId: LN_CHANNEL, smallIcon: 'ic_stat_receipt', extra: {go: 'report'},
+        title: onTime ? `היום ה-25: דוח הוצאות ${periodLabel(last)}` : `דוח הוצאות ${due.map(periodLabel).join(', ')} – באיחור`,
+        body: 'הדוח עוד לא נשלח להנהלת החשבונות. לחץ כדי לעבור לדוח.',
+        schedule: {at: t, allowWhileIdle: true}
+      });
+    }
+    if (list.length) await NP.LocalNotifications.schedule({notifications: list});
+    cfg.next = list[0]?.schedule.at.getTime() || null; cfg.count = list.length;
+  } catch (e) { console.warn('local nags', e); cfg.err = String(e.message || e); }
+  await saveSettingsObj(); renderLnag();
+}
+function renderLnag() {
+  if (!NATIVE || !$('lnagStatus')) return;
+  const c = S.lnag || {}, pend = pendingPeriods();
+  $('lnagOn').checked = c.on !== false; $('lnagInterval').value = String(c.interval || 2);
+  $('lnagStatus').innerHTML = c.on === false ? '<div class="muted" style="margin:8px 0">כבוי</div>'
+    : c.denied ? '<div class="banner" style="margin:8px 0">⚠️ אין הרשאה להתראות – אפשר אותה בהגדרות האפליקציה בטלפון</div>'
+    : `<div class="banner ok" style="margin:8px 0">🔔 ${pend.length ? `ממתין להגשה: ${pend.map(periodLabel).join(', ')}` : 'אין דוח ממתין'}` +
+      `${c.next ? `<br>התראה הבאה: ${new Date(c.next).toLocaleString('he-IL', {weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'})}` : ''}</div>`;
+}
+if (NATIVE) {
+  NP.LocalNotifications.createChannel({id: LN_CHANNEL, name: 'תזכורות הגשת דוח', description: 'מה-25 לחודש עד שהדוח נשלח', importance: 4, visibility: 1, vibration: true}).catch(() => {});
+  NP.LocalNotifications.addListener('localNotificationActionPerformed', () => goTab('report'));
+  NP.App.addListener('resume', () => { renderExpenses(); });
+}
+$('lnagOn').onchange = () => { S.lnag = Object.assign(S.lnag || {}, {on: $('lnagOn').checked}); scheduleLocalNags(true); };
+$('lnagInterval').onchange = () => { S.lnag = Object.assign(S.lnag || {}, {interval: Number($('lnagInterval').value)}); scheduleLocalNags(true); };
+$('lnagTest').onclick = async () => {
+  try {
+    let perm = await NP.LocalNotifications.requestPermissions();
+    if (perm.display !== 'granted') return alert('אין הרשאה להתראות');
+    await NP.LocalNotifications.schedule({notifications: [{id: 999, channelId: LN_CHANNEL, smallIcon: 'ic_stat_receipt', title: 'דוח הוצאות – בדיקה', body: 'ההתראות עובדות ✓', schedule: {at: new Date(Date.now() + 5000), allowWhileIdle: true}, extra: {go: 'report'}}]});
+    toast('ההתראה תגיע בעוד 5 שניות – אפשר לסגור את האפליקציה', 4000);
+  } catch (e) { alert(e.message || e); }
+};
+$('lnagExact').onclick = async () => { try { await NP.LocalNotifications.changeExactNotificationSetting(); } catch (e) { toast('לא נתמך במכשיר זה'); } };
+
+// new APK available? (GitHub release)
+async function checkAppUpdate() {
+  if (!NATIVE) return;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO.owner}/${REPO.repo}/releases/latest`, {headers: {Accept: 'application/vnd.github+json'}});
+    if (!r.ok) return;
+    const j = await r.json(), v = String(j.tag_name || '').replace(/^v/, '');
+    const cmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
+    const apk = (j.assets || []).find(a => a.name.endsWith('.apk'));
+    if (v && apk && cmp(v, VERSION) > 0) {
+      $('updBanner').innerHTML = `<div class="banner">⬆️ גרסה חדשה ${esc(v)} זמינה. <a href="${apk.browser_download_url}">הורדה והתקנה</a></div>`;
+    }
+  } catch {}
+}
+
 /* ---------------- boot ---------------- */
 (async function boot() {
   try {
@@ -1099,10 +1213,11 @@ navigator.serviceWorker?.addEventListener('message', ev => { if (ev.data?.go ===
     try { await navigator.storage?.persist?.(); } catch {}
     renderExpenses();
     if (S.nag?.on) syncNag(true);
+    if (NATIVE) { scheduleLocalNags(); checkAppUpdate(); }
     if (location.hash === '#report') { history.replaceState(history.state, '', location.pathname); goTab('report'); }
     if (!S.name) setTimeout(() => toast('ברוך הבא! התחל בהגדרות: שם, מייל הנה"ח וחתימה', 4500), 400);
   } catch (err) { console.error(err); document.body.insertAdjacentHTML('afterbegin', `<div class="banner">שגיאה בטעינת האחסון: ${esc(err.message)}</div>`); }
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !NATIVE) {
     navigator.serviceWorker.register('sw.js', {updateViaCache: 'none'}).then(r => r.update()).catch(() => {});
     let reloaded = false; // a new version took over: reload once so its code runs
     navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded && !LAYERS.length) { reloaded = true; location.reload(); } });
