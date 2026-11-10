@@ -7,8 +7,8 @@ android {
         applicationId "com.yorehyona.expenses"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode (System.getenv("VERSION_CODE") ?: "1") as Integer
-        versionName System.getenv("VERSION_NAME") ?: "dev"
+        versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+        versionName(System.getenv("VERSION_NAME") ?: "dev")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,19 +16,22 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    def ksPass = System.getenv("KEYSTORE_PASSWORD")
     signingConfigs {
-        release {
-            // keystore + password come from the CI environment (GitHub Actions secret)
-            storeFile System.getenv("KEYSTORE_FILE") ? file(System.getenv("KEYSTORE_FILE")) : null
-            storePassword System.getenv("KEYSTORE_PASSWORD")
-            keyAlias "expenses"
-            keyPassword System.getenv("KEYSTORE_PASSWORD")
-            storeType "pkcs12"
+        if (ksPass) {
+            release {
+                // keystore + password come from the CI environment (GitHub Actions secret)
+                storeFile file(System.getenv("KEYSTORE_FILE"))
+                storePassword ksPass
+                keyAlias "expenses"
+                keyPassword ksPass
+                storeType "pkcs12"
+            }
         }
     }
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            if (ksPass) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
