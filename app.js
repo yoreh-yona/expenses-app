@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
@@ -374,8 +374,9 @@ function renderFormReceipts() {
 /* ---------------- receipt viewer: pinch-zoom, filters, rotate, crop & align ---------------- */
 const V = {i: -1, readonly: false, s: 1, tx: 0, ty: 0, fit: null, ptrs: new Map(), start: null, lastTap: 0};
 function vRec() { return V.readonly ? V.ro : F.receipts[V.i]; }
-async function openViewer(i, ro) {
+async function openViewer(i, ro, title) {
   V.readonly = !!ro; V.ro = ro || null; V.i = i;
+  $('vTitle').textContent = title || 'קבלה';
   $('viewer').classList.add('on'); pushLayer('viewer', hideViewer);
   $('vTools').classList.toggle('hidden', V.readonly);
   $('vModes').classList.toggle('hidden', V.readonly || !vRec().orig);
@@ -684,7 +685,8 @@ async function openReview() {
   <div class="card"><h2>קבלות מצורפות</h2><div class="gallery" id="rvGal"></div></div>
   ${ashalHtml(repKey)}
   <div class="card">
-    <button class="btn sec block" id="rvDraft" style="margin-top:0">📊 פתיחת טיוטת Excel (ללא חתימה)</button>
+    <button class="btn block" id="rvPreview" style="margin-top:0">👁️ תצוגה מקדימה של הדוח</button>
+    <button class="btn sec block" id="rvDraft">📊 קובץ Excel (טיוטה ללא חתימה)</button>
     <label style="display:flex;align-items:center;color:var(--ink);font-size:15px;margin-top:14px">
       <input type="checkbox" id="rvOk">עיינתי בדוח ואני מאשר/ת את נכונותו</label>
     <button class="btn ok block" id="rvSign" disabled>✍️ אישור, חתימה והכנה לשליחה</button>
@@ -704,6 +706,12 @@ async function openReview() {
     spin(false);
   };
   $('rvSign').onclick = () => signAndPrepare();
+  $('rvPreview').onclick = async () => {
+    spin(true, 'מכין תצוגה מקדימה…'); await nextFrame();
+    try { await previewXlsx(await buildXlsx(repKey, false), 'תצוגה מקדימה – טיוטה'); }
+    catch (err) { console.error(err); alert('שגיאה בתצוגה המקדימה: ' + err.message); }
+    spin(false);
+  };
   if (!$('review').classList.contains('on')) pushLayer('review', hideReview);
   $('review').classList.add('on'); $('review').scrollTop = 0;
 }
@@ -727,6 +735,11 @@ async function sigPng() {
   const sig = await DB.get('files', 'signature'); if (!sig) throw new Error('חסרה חתימה');
   const bmp = await loadBitmap(sig.blob);
   return {buffer: new Uint8Array(await sig.blob.arrayBuffer()), width: bmp.width, height: bmp.height};
+}
+async function previewXlsx(blob, title) {
+  const {svg} = await ExpenseXlsx.toSvg(ExcelJS, PizZip, await blob.arrayBuffer());
+  await openViewer(-1, {blob: new Blob([svg], {type: 'image/svg+xml'})}, title);
+  toast('הגדלה בצביטה או סיבוב הטלפון לרוחב', 3000);
 }
 async function buildXlsx(key, signed) {
   const items = reportItems(key);
@@ -825,7 +838,13 @@ function renderSend() {
     ${NATIVE ? '' : `<button class="btn ${canShare ? 'sec' : ''} block" id="doDownload">⬇️ הורדת הקבצים</button>`}
     <a class="btn sec block ${NATIVE ? 'hidden' : ''}" id="doMailto" href="mailto:${encodeURIComponent(S.acctEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}">✉️ פתיחת מייל (נמען + נושא)</a>
   </div>
+  <button class="btn sec block" id="sendPreview">👁️ תצוגה מקדימה של הדוח החתום</button>
   <button class="btn ok block" id="markSent">✓ סימון הדוח כנשלח</button>`;
+  $('sendPreview').onclick = async () => {
+    spin(true, 'מכין תצוגה מקדימה…'); await nextFrame();
+    try { await previewXlsx(OUT.files[0], 'הדוח החתום'); } catch (err) { alert(err.message); }
+    spin(false);
+  };
   $('cpEmail').onclick = async () => { try { await navigator.clipboard.writeText(S.acctEmail); toast('הכתובת הועתקה'); } catch { toast('העתקה נכשלה'); } };
   const em = $('doEmail');
   if (em) em.onclick = async () => { try { await nativeEmail(OUT.files, subject, body); } catch (e) { alert('לא נמצאה אפליקציית מייל: ' + (e.message || e)); } };

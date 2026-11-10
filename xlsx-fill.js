@@ -156,3 +156,144 @@
 
   root.ExpenseXlsx = {fill, inspect, stripCode};
 })(typeof window !== 'undefined' ? window : globalThis);
+
+/* Print-preview: render the first worksheet (cells, merges, fills, borders, fonts, images) as an SVG image. */
+(function (root) {
+  'use strict';
+  const DEF_PAL = ['000000','FFFFFF','FF0000','00FF00','0000FF','FFFF00','FF00FF','00FFFF','000000','FFFFFF','FF0000','00FF00','0000FF','FFFF00','FF00FF','00FFFF',
+    '800000','008000','000080','808000','800080','008080','C0C0C0','808080','9999FF','993366','FFFFCC','CCFFFF','660066','FF8080','0066CC','CCCCFF',
+    '000080','FF00FF','FFFF00','00FFFF','800080','800000','008080','0000FF','00CCFF','CCFFFF','CCFFCC','FFFF99','99CCFF','FF99CC','CC99FF','FFCC99',
+    '3366FF','33CCCC','99CC00','FFCC00','FF9900','FF6600','666699','969696','003366','339966','003300','333300','993300','993366','333399','333333'];
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+  const toB64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
+
+  function palettes(PizZip, buf) {
+    const pal = DEF_PAL.slice(), theme = [];
+    try {
+      const z = new PizZip(buf);
+      const st = z.file('xl/styles.xml')?.asText() || '';
+      const ic = /<indexedColors>([\s\S]*?)<\/indexedColors>/.exec(st);
+      if (ic) [...ic[1].matchAll(/rgb="([0-9A-Fa-f]{8})"/g)].forEach((m, i) => { pal[i] = m[1].slice(2); });
+      const th = z.file('xl/theme/theme1.xml')?.asText() || '';
+      const cs = /<a:clrScheme[^>]*>([\s\S]*?)<\/a:clrScheme>/.exec(th);
+      if (cs) {
+        const get = n => { const m = new RegExp(`<a:${n}>[\\s\\S]*?(?:srgbClr val="([0-9A-Fa-f]{6})"|lastClr="([0-9A-Fa-f]{6})")`).exec(cs[1]); return m ? (m[1] || m[2]) : '000000'; };
+        ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink'].forEach(n => theme.push(get(n)));
+      }
+    } catch {}
+    return {pal, theme};
+  }
+  function color(c, P, fallback) {
+    if (!c) return fallback;
+    let hex = null;
+    if (c.argb) hex = c.argb.length === 8 ? c.argb.slice(2) : c.argb;
+    else if (c.indexed != null) { if (c.indexed === 64 || c.indexed === 65) return fallback; hex = P.pal[c.indexed]; }
+    else if (c.theme != null) hex = P.theme[c.theme] || null;
+    if (!hex) return fallback;
+    let r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
+    const t = c.tint || 0;
+    const f = v => Math.round(t > 0 ? v + (255 - v) * t : v * (1 + t));
+    if (t) { r = f(r); g = f(g); b = f(b); }
+    return `rgb(${r},${g},${b})`;
+  }
+  const BORDER = {thin: '1px solid', hair: '1px solid', medium: '2px solid', thick: '3px solid', double: '3px double', dotted: '1px dotted', dashed: '1px dashed',
+    mediumDashed: '2px dashed', dashDot: '1px dashed', mediumDashDot: '2px dashed', dashDotDot: '1px dotted', slantDashDot: '2px dashed'};
+  const pad = n => String(n).padStart(2, '0');
+
+  function fmtValue(v, numFmt) {
+    if (v && typeof v === 'object' && !(v instanceof Date)) {
+      if (v.richText) return v.richText.map(t => t.text).join('');
+      if ('result' in v || 'formula' in v) v = v.result;
+      else if (v.text) return v.text;
+      else if (v.error) return v.error;
+    }
+    if (v == null || v === '') return '';
+    const f = String(numFmt || '');
+    if (v instanceof Date) {
+      const d = v.getUTCDate(), m = v.getUTCMonth() + 1, y = v.getUTCFullYear();
+      if (/d/i.test(f.replace(/\[[^\]]*\]/g, '')) ) return `${pad(d)}/${pad(m)}/${y}`;
+      return `${pad(m)}/${y}`;
+    }
+    if (typeof v === 'number') {
+      const dec = /0\.(0+)/.exec(f), n = dec ? dec[1].length : (Number.isInteger(v) ? 0 : 2);
+      const s = Math.abs(v).toLocaleString('en-US', {minimumFractionDigits: n, maximumFractionDigits: n, useGrouping: /#,##/.test(f) || Math.abs(v) >= 1000});
+      if (v === 0 && /;\s*"?-?"?\s*;/.test(f) && /-/.test(f.split(';')[2] || '')) return '-';
+      return (v < 0 ? '-' : '') + s;
+    }
+    return String(v);
+  }
+  const colToPx = w => Math.round((w == null ? 8.43 : w) * 7 + 5);
+  const rowToPx = h => Math.round((h == null ? 15 : h) * 4 / 3);
+
+  async function toSvg(ExcelJS, PizZip, buf) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    const ws = wb.worksheets[0], P = palettes(PizZip, buf);
+    const rtl = !!(ws.views && ws.views[0] && ws.views[0].rightToLeft);
+    // range: print area if set, else used range
+    let r0 = 1, c0 = 1, r1 = ws.rowCount, c1 = ws.columnCount;
+    const pa = ws.pageSetup && ws.pageSetup.printArea;
+    const m = pa && /\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)/.exec(pa.split(',')[0]);
+    const colNum = s => s.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+    if (m) { c0 = colNum(m[1]); r0 = +m[2]; c1 = colNum(m[3]); r1 = +m[4]; }
+    const cols = [], rows = [];
+    for (let c = c0; c <= c1; c++) { const col = ws.getColumn(c); cols.push(col.hidden ? 0 : colToPx(col.width)); }
+    for (let r = r0; r <= r1; r++) { const row = ws.getRow(r); rows.push(row.hidden ? 0 : rowToPx(row.height)); }
+    const W = cols.reduce((a, b) => a + b, 0), H = rows.reduce((a, b) => a + b, 0);
+    // merges
+    const span = {}, covered = new Set();
+    Object.values(ws._merges || {}).forEach(mg => {
+      const {top, left, bottom, right} = mg.model || mg;
+      span[`${top}:${left}`] = {rs: bottom - top + 1, cs: right - left + 1};
+      for (let r = top; r <= bottom; r++) for (let c = left; c <= right; c++) if (r !== top || c !== left) covered.add(`${r}:${c}`);
+    });
+    let html = `<table style="border-collapse:collapse;table-layout:fixed;width:${W}px;direction:${rtl ? 'rtl' : 'ltr'};font-family:Arial,'Segoe UI',sans-serif">`;
+    html += '<colgroup>' + cols.map(w => `<col style="width:${w}px"/>`).join('') + '</colgroup>';
+    for (let r = r0; r <= r1; r++) {
+      const row = ws.getRow(r);
+      html += `<tr style="height:${rows[r - r0]}px">`;
+      for (let c = c0; c <= c1; c++) {
+        if (covered.has(`${r}:${c}`)) continue;
+        const cell = row.getCell(c), st = cell.style || {}, sp = span[`${r}:${c}`];
+        const css = ['padding:0 3px', 'overflow:hidden', 'box-sizing:border-box'];
+        const fill = st.fill && st.fill.type === 'pattern' && st.fill.pattern !== 'none' ? color(st.fill.fgColor, P, null) : null;
+        css.push('background:' + (fill || '#fff'));
+        const f = st.font || {};
+        css.push(`font-size:${Math.round((f.size || 11) * 4 / 3)}px`, `color:${color(f.color, P, '#000')}`);
+        if (f.bold) css.push('font-weight:bold'); if (f.italic) css.push('font-style:italic'); if (f.underline) css.push('text-decoration:underline');
+        const b = st.border || {}, side = (k, cssSide) => { const s = b[k] && BORDER[b[k].style]; if (s) css.push(`border-${cssSide}:${s} ${color(b[k].color, P, '#000')}`); };
+        side('top', 'top'); side('bottom', 'bottom'); side('left', rtl ? 'right' : 'left'); side('right', rtl ? 'left' : 'right');
+        const al = st.alignment || {}, v = cell.value;
+        const isNum = typeof v === 'number' || v instanceof Date || (v && typeof v === 'object' && typeof v.result === 'number');
+        let h = al.horizontal || (isNum ? 'right' : 'general');
+        if (h === 'general') h = rtl ? 'right' : 'left';
+        if (h === 'centerContinuous') h = 'center';
+        css.push('text-align:' + (h === 'fill' || h === 'justify' || h === 'distributed' ? 'center' : h));
+        css.push('vertical-align:' + (al.vertical === 'top' ? 'top' : al.vertical === 'middle' || al.vertical === 'center' ? 'middle' : 'bottom'));
+        css.push(al.wrapText ? 'white-space:normal;word-break:break-word;line-height:1.15' : 'white-space:nowrap');
+        const txt = fmtValue(v, st.numFmt);
+        html += `<td${sp ? ` rowspan="${sp.rs}" colspan="${sp.cs}"` : ''} style="${css.join(';')}">${esc(txt)}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</table>';
+    // images (e.g. the signature)
+    let imgs = '';
+    const colX = x => { const i = Math.floor(x) - (c0 - 1); let px = 0; for (let k = 0; k < Math.min(i, cols.length); k++) px += cols[k]; return px + (x - Math.floor(x)) * (cols[i] || 0); };
+    const rowY = y => { const i = Math.floor(y) - (r0 - 1); let px = 0; for (let k = 0; k < Math.min(i, rows.length); k++) px += rows[k]; return px + (y - Math.floor(y)) * (rows[i] || 0); };
+    for (const im of ws.getImages()) {
+      const media = wb.getImage(Number(im.imageId)); if (!media || !media.buffer) continue;
+      const tl = im.range.tl, ext = im.range.ext || {};
+      const x = colX(tl.col ?? tl.nativeCol), y = rowY(tl.row ?? tl.nativeRow);
+      const w = ext.width || 120, h = ext.height || 40;
+      const left = rtl ? W - x - w : x;
+      imgs += `<img src="data:image/${media.extension || 'png'};base64,${toB64(new Uint8Array(media.buffer))}" style="position:absolute;left:${left}px;top:${y}px;width:${w}px;height:${h}px"/>`;
+    }
+    const M = 24, SW = W + 2 * M, SH = H + 2 * M;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${SW}" height="${SH}" viewBox="0 0 ${SW} ${SH}">
+<rect width="100%" height="100%" fill="#fff"/>
+<foreignObject x="${M}" y="${M}" width="${W}" height="${H}"><div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${W}px;height:${H}px">${html}${imgs}</div></foreignObject></svg>`;
+    return {svg, width: SW, height: SH};
+  }
+  root.ExpenseXlsx = Object.assign(root.ExpenseXlsx || {}, {toSvg});
+})(typeof window !== 'undefined' ? window : globalThis);
