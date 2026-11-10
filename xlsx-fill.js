@@ -126,9 +126,22 @@
     }
     if (sig && L.signature) {
       const id = wb.addImage({buffer: sig.buffer, extension: 'png'});
-      const h = 40, w = Math.min(160, Math.round(h * sig.width / sig.height));
-      // sit on the signature line: start half a row above the value cell
-      ws.addImage(id, {tl: {col: L.signature.col - 1 + 0.15, row: L.signature.row - 1 - 0.55}, ext: {width: w, height: h}, editAs: 'oneCell'});
+      const r = L.signature.row, c = L.signature.col, cell = ws.getRow(r).getCell(c);
+      const colPx = k => Math.round((ws.getColumn(k).width ?? 8.43) * 7 + 5), rowPx = k => Math.round((ws.getRow(k).height ?? 15) * 4 / 3);
+      let c2 = c; // the signature cell is usually merged across a few columns
+      while (c2 < c + 10) { const nx = ws.getRow(r).getCell(c2 + 1); if (nx.isMerged && nx.master.address === cell.address) c2++; else break; }
+      let boxW = 0; for (let k = c; k <= c2; k++) boxW += colPx(k);
+      const aspect = sig.width / sig.height;
+      let h = 50, w = h * aspect;
+      if (w > boxW * 0.92) { w = boxW * 0.92; h = w / aspect; }
+      // centred over the signature line, crossing it slightly like a hand signature
+      let col = c, xo = (boxW - w) / 2;
+      while (xo >= colPx(col) && col < c2) { xo -= colPx(col); col++; }
+      let row = r, yo = rowPx(r) + 12 - h;
+      while (yo < 0 && row > 1) { row--; yo += rowPx(row); }
+      while (yo >= rowPx(row)) { yo -= rowPx(row); row++; }
+      ws.addImage(id, {tl: {nativeCol: col - 1, nativeColOff: Math.round(xo * 9525), nativeRow: row - 1, nativeRowOff: Math.round(yo * 9525)},
+        ext: {width: Math.round(w), height: Math.round(h)}, editAs: 'oneCell'});
     }
     wb.calcProperties = Object.assign(wb.calcProperties || {}, {fullCalcOnLoad: true});
     let out = await wb.xlsx.writeBuffer();
@@ -284,7 +297,9 @@
     for (const im of ws.getImages()) {
       const media = wb.getImage(Number(im.imageId)); if (!media || !media.buffer) continue;
       const tl = im.range.tl, ext = im.range.ext || {};
-      const x = colX(tl.col ?? tl.nativeCol), y = rowY(tl.row ?? tl.nativeRow);
+      const sumTo = (arr, n) => { let p = 0; for (let k = 0; k < Math.min(n, arr.length); k++) p += arr[k]; return p; };
+      const x = tl.nativeCol != null ? sumTo(cols, tl.nativeCol - (c0 - 1)) + (tl.nativeColOff || 0) / 9525 : colX(tl.col);
+      const y = tl.nativeRow != null ? sumTo(rows, tl.nativeRow - (r0 - 1)) + (tl.nativeRowOff || 0) / 9525 : rowY(tl.row);
       const w = ext.width || 120, h = ext.height || 40;
       const left = rtl ? W - x - w : x;
       imgs += `<img src="data:image/${media.extension || 'png'};base64,${toB64(new Uint8Array(media.buffer))}" style="position:absolute;left:${left}px;top:${y}px;width:${w}px;height:${h}px"/>`;

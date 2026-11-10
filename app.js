@@ -1,5 +1,5 @@
 'use strict';
-const VERSION = '2.1.1';
+const VERSION = '2.1.2';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 

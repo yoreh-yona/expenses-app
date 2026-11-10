@@ -1,4 +1,4 @@
-const CACHE = 'expenses-v2.1.1';
+const CACHE = 'expenses-v2.1.2';
 const ASSETS = ['./', 'index.html', 'app.js', 'manifest.json', 'xlsx-fill.js', 'imgproc.js',
   'vendor/pizzip.min.js', 'vendor/exceljs.min.js', 'vendor/pdf-lib.min.js', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS.map(u => new Request(u, {cache: 'no-cache'}))))); self.skipWaiting(); });
