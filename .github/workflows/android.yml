@@ -29,7 +29,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           rm -rf www && mkdir www
-          cp -r ../index.html ../app.js ../imgproc.js ../xlsx-fill.js ../manifest.json ../vendor ../icons www/
+          cp -r ../index.html ../app.js ../imgproc.js ../xlsx-fill.js ../manifest.json ../whatsnew.json ../vendor ../icons www/
           npx cap sync android
       - name: Build signed APK
         working-directory: android-app/android
@@ -63,5 +63,6 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" expenses.apk --clobber
           else
-            gh release create "$TAG" expenses.apk --title "הוצאות $TAG" --notes "אפליקציית אנדרואיד – להורדה והתקנה: expenses.apk"
+            node -e "const w=require('./whatsnew.json');console.log(w.notes.map(n=>'- '+n).join('\\n'))" > notes.md
+            gh release create "$TAG" expenses.apk --title "הוצאות $TAG" --notes-file notes.md
           fi

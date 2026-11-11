@@ -114,6 +114,8 @@ canvas#sigpad{width:100%;height:180px;background:#fff;border:1px solid var(--lin
 .cd.today{outline:2px solid var(--pri2)}
 .cd.sel{background:var(--pri);color:#fff}
 .cd:disabled{opacity:.3}
+.cbar{height:8px;background:#e6eaf0;border-radius:6px;overflow:hidden;margin-top:8px}
+.cbar div{height:100%;border-radius:6px}
 code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;direction:ltr;display:inline-block}
 </style>
 </head>
@@ -138,6 +140,7 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
         <div class="big" id="curTotal">₪0</div>
       </div>
     </div>
+    <div class="card hidden" id="clothCard"></div>
     <div class="row" style="margin-bottom:8px">
       <select id="listPeriod"></select>
     </div>
@@ -186,6 +189,12 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
       <div class="muted" style="margin-top:6px">בתמונה של חתימה על דף לבן הרקע יוסר אוטומטית.</div>
     </div>
     <div class="card">
+      <h2>תקציב ביגוד 👕</h2>
+      <label>תקציב שנתי (₪)</label><input id="sCloth" type="number" inputmode="decimal" placeholder="0 = ללא תקציב">
+      <div class="muted" style="margin-top:6px">כל הוצאה מסוג "ביגוד" יורדת מהתקציב של אותה שנה קלנדרית. בדוח לאקסל היא נכנסת לעמודת "שונות" עם התיאור "ביגוד".</div>
+      <div id="sClothStatus" class="muted" style="margin-top:6px"></div>
+    </div>
+    <div class="card">
       <h2>קובץ הדוח של הנהלת החשבונות</h2>
       <div id="tplStatus" class="muted"></div>
       <div class="row" style="margin-top:8px">
@@ -213,6 +222,7 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
       <div id="lnagStatus"></div>
       <label>תדירות</label>
       <select id="lnagInterval"><option value="1">כל שעה</option><option value="2">כל שעתיים</option><option value="3">כל 3 שעות</option></select>
+      <label style="display:flex;align-items:center;color:var(--ink);font-size:15px;margin-top:10px"><input type="checkbox" id="lnagCloth" checked>תזכורת ניצול תקציב ביגוד (בדצמבר, פעם בשבוע, אם נשארה יתרה)</label>
       <div class="row" style="margin-top:10px"><button class="btn sec" id="lnagTest">התראת בדיקה</button><button class="btn sec" id="lnagExact">דיוק בשעה ⏰</button></div>
       <div class="muted" style="margin-top:8px">אם ההתראות מאחרות: הגדרות הטלפון ← אפליקציות ← הוצאות ← סוללה ← "ללא הגבלה".</div>
     </div>
@@ -280,6 +290,7 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
       </div>
       <div class="muted" id="fAshalNote" style="margin-top:6px">א.ש.ל – לא נדרשת קבלה.</div>
     </div>
+    <div id="fCloth" class="ashal hidden" style="font-size:14px"></div>
     <label>תיאור / ספק</label>
     <input id="fDesc" placeholder="לדוגמה: דלק – פז, נסיעה לאתר">
     <div id="fRcptWrap">
@@ -349,6 +360,15 @@ code{background:#eef1f5;padding:1px 5px;border-radius:5px;font-size:12px;directi
     <div class="calhead"><button id="calPrev" class="btn sec">› חודש קודם</button><b id="calTitle"></b><button id="calNext" class="btn sec">חודש הבא ‹</button></div>
     <div class="calgrid" id="calGrid"></div>
     <div class="row" style="margin-top:10px"><button class="btn sec" id="calYest">אתמול</button><button class="btn" id="calToday">היום</button></div>
+  </div>
+</div>
+
+<!-- INFO / UPDATE -->
+<div class="dlg" id="infoDlg">
+  <div class="dlgbox">
+    <div style="font-size:17px;font-weight:700;margin:4px 0 10px" id="infoTitle"></div>
+    <div id="infoBody" style="font-size:14px"></div>
+    <div class="row" style="margin-top:14px"><button class="btn sec hidden" id="infoLater">אחר כך</button><button class="btn" id="infoOk">הבנתי</button></div>
   </div>
 </div>
 

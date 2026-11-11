@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
       - name: Collect web files
-        run: mkdir _site && cp -r index.html app.js imgproc.js xlsx-fill.js sw.js manifest.json .nojekyll vendor icons _site/
+        run: mkdir _site && cp -r index.html app.js imgproc.js xlsx-fill.js sw.js manifest.json .nojekyll whatsnew.json vendor icons _site/
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

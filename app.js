@@ -1,16 +1,18 @@
 'use strict';
-const VERSION = '2.2.1';
+const VERSION = '2.3.0';
 const CUTOFF_DAY = 25;
 const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
 const ASHAL_NAME = 'א.ש.ל';
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
+const CLOTHING_NAME = 'ביגוד';
 // categories = expense columns of the accounting Excel form (replaced from the uploaded file itself)
 const FORM_CATEGORIES = ['ארוחות עובדים', 'ארוחות עסקיות', 'דלק', 'ציוד רכב', 'ציוד סלולארי', 'נסיעות וחניונים', 'משרדיות', 'כיבוד', 'שונות'];
 const DEFAULT_SETTINGS = {
   v: SETTINGS_VERSION,
   name: '', role: '', company: '', manager: '', acctEmail: '', acctName: 'הנהלת חשבונות', notes: '',
-  categories: [...FORM_CATEGORIES.map(name => ({name, ashal: false})), {name: ASHAL_NAME, ashal: true}],
+  categories: [...FORM_CATEGORIES.map(name => ({name, ashal: false})), {name: CLOTHING_NAME, ashal: false, clothing: true}, {name: ASHAL_NAME, ashal: true}],
+  clothingBudget: 0, // annual (calendar year); 'ביגוד' expenses are deducted from it
   // A.SH.L policy: up to 9h ₪55, up to 12h ₪100, above 12h ₪150 (reported in ProperTime, not in the Excel form)
   ashalTiers: [{upTo: 9, amount: 55}, {upTo: 12, amount: 100}, {upTo: null, amount: 150}],
   sentReports: {} // periodKey -> {sentAt, total, count}
@@ -104,6 +106,19 @@ async function loadSettings() {
     delete S.empId; delete S.dept; delete S.ashalMode; delete S.ashalRate;
     await saveSettingsObj();
   }
+  if (S.v < 3) { // v3: clothing category (from the annual clothing budget)
+    if (!S.categories.some(c => c.clothing)) S.categories.splice(S.categories.findIndex(c => c.ashal), 0, {name: CLOTHING_NAME, ashal: false, clothing: true});
+    S.v = 3; await saveSettingsObj();
+  }
+}
+const isClothing = e => !!(catByName(e.category)?.clothing || e.category === CLOTHING_NAME);
+const clothingUsed = (year, exceptId) => EXP.filter(e => e.id !== exceptId && isClothing(e) && e.date.startsWith(year + '-')).reduce((t, e) => t + Number(e.amount), 0);
+function clothingStatus(year = new Date().getFullYear()) {
+  const budget = Number(S.clothingBudget) || 0, used = clothingUsed(year);
+  return {year, budget, used, left: budget - used, pct: budget ? Math.min(100, Math.round(used / budget * 100)) : 0};
+}
+function clothingBar(st) {
+  return `<div class="cbar"><div style="width:${st.pct}%;background:${st.left < 0 ? 'var(--bad)' : 'var(--ok)'}"></div></div>`;
 }
 async function saveSettingsObj() { await DB.put('kv', {k: 'settings', v: S}); }
 async function loadExpenses() { EXP = (await DB.all('expenses')).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt); }
@@ -189,7 +204,14 @@ async function renderExpenses() {
   else if (cur.length && d >= 20 && d <= CUTOFF_DAY) rem = `<div class="banner">⏰ ${CUTOFF_DAY - d === 0 ? 'היום' : 'בעוד ' + (CUTOFF_DAY - d) + ' ימים'} ה-${CUTOFF_DAY} – זמן להגיש את דוח ${periodLabel(cp)}. <a href="#" id="goRep">לדוח ←</a></div>`;
   const prev = periodsList().filter(p => p < cp && !S.sentReports[p] && EXP.some(e => e.period === p));
   if (prev.length) rem += `<div class="banner">יש דוח שלא סומן כנשלח: ${prev.map(periodLabel).join(', ')}</div>`;
+  const cs = clothingStatus();
+  if (cs.budget > 0 && new Date().getMonth() === 11 && cs.left > 0)
+    rem += `<div class="banner">👕 נותרו ${money(cs.left)} בתקציב הביגוד של ${cs.year} – כדאי לנצל עד סוף השנה.</div>`;
   $('remind').innerHTML = rem;
+  $('clothCard').classList.toggle('hidden', !(cs.budget > 0));
+  if (cs.budget > 0) $('clothCard').innerHTML = `<div class="sum"><div><div class="muted">תקציב ביגוד ${cs.year}</div>
+    <div style="font-weight:600">נוצל ${money(cs.used)} מתוך ${money(cs.budget)}</div></div>
+    <div style="font-weight:700;color:${cs.left < 0 ? 'var(--bad)' : 'var(--ok)'}">${cs.left < 0 ? 'חריגה ' + money(-cs.left) : 'נותרו ' + money(cs.left)}</div></div>${clothingBar(cs)}`;
   const g = $('goRep'); if (g) g.onclick = ev => { ev.preventDefault(); goTab('report'); };
 
   const sel = $('listPeriod');
@@ -246,7 +268,7 @@ $('sheet').onclick = ev => { if (ev.target.id === 'sheet') closeForm(); };
 $('fab').onclick = () => openForm(null);
 
 /* date (dd/mm/yyyy, no future) + which report the expense goes to */
-function setFormDate(iso, keepPeriod) { F.date = iso; $('fDateBtn').textContent = fmtDate(iso); updPeriodChoice(keepPeriod); }
+function setFormDate(iso, keepPeriod) { F.date = iso; $('fDateBtn').textContent = fmtDate(iso); updPeriodChoice(keepPeriod); if ($('fCloth')) updClothing(); }
 function updPeriodChoice(keep) {
   const nat = periodKeyFor(F.date), cur = currentPeriod(), wrap = $('fPeriodWrap');
   if (nat >= cur && (!keep || keep === nat)) { wrap.classList.add('hidden'); return; }
@@ -289,6 +311,7 @@ function onCatChange() {
   $('fAmountWrap').classList.toggle('hidden', ash);
   $('fRcptWrap').classList.toggle('hidden', ash);
   if (ash) updAshal();
+  updClothing();
   $('fDesc').placeholder = $('fCat').value === 'ארוחות עסקיות' ? 'עם מי הייתה הפגישה ובאיזה נושא / פרויקט' : 'לדוגמה: פז – נסיעה לאתר';
 }
 function updAshal() {
@@ -296,6 +319,17 @@ function updAshal() {
   $('fAshalAmt').value = num2(a);
   $('fAshalNote').textContent = 'א.ש.ל – ללא קבלה. לא נכנס לדוח האקסל; מרוכז בלשונית "דוח" לדיווח בפרופר טיים.';
 }
+function updClothing() {
+  const el = $('fCloth'), cl = !!catByName($('fCat').value)?.clothing;
+  el.classList.toggle('hidden', !cl); if (!cl) return;
+  const budget = Number(S.clothingBudget) || 0;
+  if (!budget) { el.innerHTML = 'לא הוגדר תקציב ביגוד שנתי (הגדרות ← תקציב ביגוד).'; return; }
+  const year = Number((F?.date || todayISO()).slice(0, 4)), used = clothingUsed(year, F?.id), amt = Number($('fAmount').value) || 0;
+  const left = budget - used, after = left - amt;
+  el.innerHTML = `👕 תקציב ביגוד ${year}: נותרו <b>${money(left)}</b> מתוך ${money(budget)}` +
+    (amt ? (after < 0 ? `<br><b style="color:var(--bad)">⚠️ חריגה של ${money(-after)} מהתקציב</b>` : `<br>אחרי ההוצאה: ${money(after)}`) : '');
+}
+$('fAmount').addEventListener('input', updClothing);
 $('fCat').onchange = onCatChange;
 $('fHours').oninput = updAshal;
 
@@ -593,6 +627,10 @@ $('fSave').onclick = async () => {
   for (const id of removed) await DB.del('files', id);
   await DB.put('expenses', rec);
   await loadExpenses(); syncNag(); scheduleLocalNags();
+  if (isClothing(rec) && Number(S.clothingBudget) > 0) {
+    const left = Number(S.clothingBudget) - clothingUsed(Number(rec.date.slice(0, 4)));
+    if (left < 0) setTimeout(() => toast(`⚠️ תקציב הביגוד נוצל – חריגה של ${money(-left)}`, 4500), 2700);
+  }
   const msg = rec.period !== currentPeriod() ? `נשמר – בדוח ${periodLabel(rec.period)}` : (!ash && !rec.receipts.length ? 'נשמר (ללא קבלה)' : 'נשמר ✓');
   closeForm(); listKey = rec.period; renderExpenses(); toast(msg);
 };
@@ -767,7 +805,7 @@ async function buildXlsx(key, signed) {
   const data = {
     name: S.name, role: S.role, company: S.company, manager: S.manager, notes, advances: adv,
     monthDate: new Date(Date.UTC(y, m - 1, 1)),
-    items: items.map(e => ({date: utc(e.date), description: e.description || '', category: e.category, amount: Number(e.amount), invoice: e.receipts?.length ? e.index : null}))
+    items: items.map(e => ({date: utc(e.date), description: isClothing(e) ? `ביגוד${e.description ? ' – ' + e.description : ''}` : (e.description || ''), category: e.category, amount: Number(e.amount), invoice: e.receipts?.length ? e.index : null}))
   };
   const {buffer} = await ExpenseXlsx.fill(ExcelJS, PizZip, await getTemplate(), data, signed ? await sigPng() : null);
   return new Blob([buffer], {type: XLSX_MIME});
@@ -888,6 +926,8 @@ function renderSend() {
 async function renderSettings() {
   $('sName').value = S.name; $('sRole').value = S.role; $('sManager').value = S.manager; $('sCompany').value = S.company;
   $('sAcctEmail').value = S.acctEmail; $('sAcctName').value = S.acctName; $('sNotes').value = S.notes;
+  $('sCloth').value = S.clothingBudget || '';
+  renderClothSettings();
   renderCats(); renderTiers(); renderNag(); renderLnag();
   $('nagCard').classList.toggle('hidden', NATIVE); $('lnagCard').classList.toggle('hidden', !NATIVE);
   await renderSigTpl();
@@ -897,6 +937,12 @@ async function renderSettings() {
   } catch { $('storageInfo').textContent = 'הנתונים שמורים בטלפון בלבד. מומלץ לייצא גיבוי פעם בחודש.'; }
   $('ver').textContent = VERSION;
 }
+function renderClothSettings() {
+  const cs = clothingStatus(), b = Number($('sCloth').value) || 0;
+  $('sClothStatus').innerHTML = b > 0 ? `נוצל ב-${cs.year}: ${money(cs.used)} · ${cs.used > b ? '<b style="color:var(--bad)">חריגה ' + money(cs.used - b) + '</b>' : 'נותרו ' + money(b - cs.used)}${clothingBar({...cs, pct: Math.min(100, Math.round(cs.used / b * 100)), left: b - cs.used})}` : '';
+}
+$('sCloth').addEventListener('input', () => { S.clothingBudget = Number($('sCloth').value) || 0; renderClothSettings(); });
+$('sCloth').addEventListener('change', () => scheduleLocalNags());
 async function renderSigTpl() {
   const sig = await DB.get('files', 'signature');
   $('sigPreview').innerHTML = sig ? `<img src="${URL.createObjectURL(sig.blob)}">` : '<span class="muted">אין חתימה</span>';
@@ -907,6 +953,7 @@ async function renderSigTpl() {
 function readSettingsForm() {
   S.name = $('sName').value.trim(); S.role = $('sRole').value.trim(); S.manager = $('sManager').value.trim(); S.company = $('sCompany').value.trim();
   S.acctEmail = $('sAcctEmail').value.trim(); S.acctName = $('sAcctName').value.trim(); S.notes = $('sNotes').value.trim();
+  S.clothingBudget = Number($('sCloth').value) || 0;
   const rows = [...document.querySelectorAll('#tierList .catrow')];
   if (rows.length) S.ashalTiers = rows.map(r => { const [a, b] = r.querySelectorAll('input'); return {upTo: a.value === '' ? null : Number(a.value), amount: Number(b.value) || 0}; });
 }
@@ -940,7 +987,7 @@ $('tplFile').onchange = async ev => {
     const L = await ExpenseXlsx.inspect(ExcelJS, await f.arrayBuffer());
     await DB.put('files', {id: 'template', blob: f, type: XLSX_MIME, name: f.name});
     readSettingsForm();
-    S.categories = [...L.categories.map(c => ({name: c.name, ashal: false})), {name: ASHAL_NAME, ashal: true}];
+    S.categories = [...L.categories.map(c => ({name: c.name, ashal: false})), {name: CLOTHING_NAME, ashal: false, clothing: true}, {name: ASHAL_NAME, ashal: true}];
     await saveSettingsObj(); renderCats(); renderSigTpl();
     const rows = L.lastData - L.firstData + 1;
     toast(`✓ הקובץ נשמר: ${L.categories.length} סוגי הוצאות, ${rows} שורות${L.signature ? ', מקום לחתימה' : ' – ⚠️ לא נמצא מקום לחתימה'}`, 5000);
@@ -1167,36 +1214,51 @@ async function scheduleLocalNags(force) {
   try {
     const pend = await NP.LocalNotifications.getPending();
     if (pend.notifications?.length) await NP.LocalNotifications.cancel({notifications: pend.notifications.map(n => ({id: n.id}))});
-    const periods = pendingPeriods();
-    if (!cfg.on || !periods.length) { renderLnag(); return; }
+    const periods = cfg.on ? pendingPeriods() : [];
+    const cs = clothingStatus(), clothOn = cfg.cloth !== false && cs.budget > 0 && cs.left > 0;
+    if (!periods.length && !clothOn) { cfg.next = null; await saveSettingsObj(); renderLnag(); return; }
     let perm = await NP.LocalNotifications.checkPermissions();
     if (perm.display !== 'granted') perm = await NP.LocalNotifications.requestPermissions();
     if (perm.display !== 'granted') { cfg.denied = true; renderLnag(); return; }
     cfg.denied = false;
-    const every = Math.max(1, cfg.interval || 2), now = Date.now(), times = new Map();
-    const [fy, fm] = periods[0].split('-').map(Number);
-    for (let day = 0; day < 60 && times.size < 100; day++) {
-      const hours = day < 7 ? Array.from({length: Math.floor((21 - 9) / every) + 1}, (_, i) => 9 + i * every) : [9];
-      for (const h of hours) {
-        const t = new Date(fy, fm - 1, 25 + day, h, 0, 0);
-        if (t.getTime() > now) times.set(t.getTime(), t);
+    const now = Date.now(), list = [];
+    if (periods.length) {
+      const every = Math.max(1, cfg.interval || 2), times = new Map();
+      const [fy, fm] = periods[0].split('-').map(Number);
+      for (let day = 0; day < 60 && times.size < 100; day++) {
+        const hours = day < 7 ? Array.from({length: Math.floor((21 - 9) / every) + 1}, (_, i) => 9 + i * every) : [9];
+        for (const h of hours) {
+          const t = new Date(fy, fm - 1, 25 + day, h, 0, 0);
+          if (t.getTime() > now) times.set(t.getTime(), t);
+        }
+      }
+      let id = 1000;
+      for (const t of [...times.values()].sort((a, b) => a - b)) {
+        const due = periods.filter(p => { const [y, m] = p.split('-').map(Number); return t >= new Date(y, m - 1, 25, 9); });
+        if (!due.length) continue;
+        const last = due[due.length - 1], [ly, lm] = last.split('-').map(Number);
+        const onTime = due.length === 1 && t.getFullYear() === ly && t.getMonth() === lm - 1 && t.getDate() === 25;
+        list.push({
+          id: id++, channelId: LN_CHANNEL, smallIcon: 'ic_stat_receipt', extra: {go: 'report'},
+          title: onTime ? `היום ה-25: דוח הוצאות ${periodLabel(last)}` : `דוח הוצאות ${due.map(periodLabel).join(', ')} – באיחור`,
+          body: 'הדוח עוד לא נשלח להנהלת החשבונות. לחץ כדי לעבור לדוח.',
+          schedule: {at: t, allowWhileIdle: true}
+        });
       }
     }
-    const list = [];
-    let id = 1000;
-    for (const t of [...times.values()].sort((a, b) => a - b)) {
-      const due = periods.filter(p => { const [y, m] = p.split('-').map(Number); return t >= new Date(y, m - 1, 25, 9); });
-      if (!due.length) continue;
-      const last = due[due.length - 1], [ly, lm] = last.split('-').map(Number);
-      const onTime = due.length === 1 && t.getFullYear() === ly && t.getMonth() === lm - 1 && t.getDate() === 25;
-      list.push({
-        id: id++, channelId: LN_CHANNEL, smallIcon: 'ic_stat_receipt', extra: {go: 'report'},
-        title: onTime ? `היום ה-25: דוח הוצאות ${periodLabel(last)}` : `דוח הוצאות ${due.map(periodLabel).join(', ')} – באיחור`,
-        body: 'הדוח עוד לא נשלח להנהלת החשבונות. לחץ כדי לעבור לדוח.',
-        schedule: {at: t, allowWhileIdle: true}
-      });
+    if (clothOn) { // December: weekly reminder to use what is left of this year's clothing budget
+      let id = 5000;
+      for (const d of [1, 8, 15, 22, 29]) {
+        const t = new Date(cs.year, 11, d, 10, 0, 0);
+        if (t.getTime() <= now) continue;
+        list.push({id: id++, channelId: LN_CHANNEL, smallIcon: 'ic_stat_receipt', extra: {go: 'expenses'},
+          title: `תקציב ביגוד ${cs.year}: נותרו ${money(cs.left)}`,
+          body: `נוצלו ${money(cs.used)} מתוך ${money(cs.budget)}. כדאי לנצל את היתרה עד סוף השנה.`,
+          schedule: {at: t, allowWhileIdle: true}});
+      }
     }
     if (list.length) await NP.LocalNotifications.schedule({notifications: list});
+    list.sort((a, b) => a.schedule.at - b.schedule.at);
     cfg.next = list[0]?.schedule.at.getTime() || null; cfg.count = list.length;
   } catch (e) { console.warn('local nags', e); cfg.err = String(e.message || e); }
   await saveSettingsObj(); renderLnag();
@@ -1204,7 +1266,7 @@ async function scheduleLocalNags(force) {
 function renderLnag() {
   if (!NATIVE || !$('lnagStatus')) return;
   const c = S.lnag || {}, pend = pendingPeriods();
-  $('lnagOn').checked = c.on !== false; $('lnagInterval').value = String(c.interval || 2);
+  $('lnagOn').checked = c.on !== false; $('lnagInterval').value = String(c.interval || 2); $('lnagCloth').checked = c.cloth !== false;
   $('lnagStatus').innerHTML = c.on === false ? '<div class="muted" style="margin:8px 0">כבוי</div>'
     : c.denied ? '<div class="banner" style="margin:8px 0">⚠️ אין הרשאה להתראות – אפשר אותה בהגדרות האפליקציה בטלפון</div>'
     : `<div class="banner ok" style="margin:8px 0">🔔 ${pend.length ? `ממתין להגשה: ${pend.map(periodLabel).join(', ')}` : 'אין דוח ממתין'}` +
@@ -1212,9 +1274,10 @@ function renderLnag() {
 }
 if (NATIVE) {
   NP.LocalNotifications.createChannel({id: LN_CHANNEL, name: 'תזכורות הגשת דוח', description: 'מה-25 לחודש עד שהדוח נשלח', importance: 4, visibility: 1, vibration: true}).catch(() => {});
-  NP.LocalNotifications.addListener('localNotificationActionPerformed', () => goTab('report'));
-  NP.App.addListener('resume', () => { renderExpenses(); });
+  NP.LocalNotifications.addListener('localNotificationActionPerformed', ev => goTab(ev?.notification?.extra?.go === 'expenses' ? 'expenses' : 'report'));
+  NP.App.addListener('resume', () => { renderExpenses(); checkAppUpdate(); });
 }
+$('lnagCloth').onchange = () => { S.lnag = Object.assign(S.lnag || {}, {cloth: $('lnagCloth').checked}); scheduleLocalNags(true); };
 $('lnagOn').onchange = () => { S.lnag = Object.assign(S.lnag || {}, {on: $('lnagOn').checked}); scheduleLocalNags(true); };
 $('lnagInterval').onchange = () => { S.lnag = Object.assign(S.lnag || {}, {interval: Number($('lnagInterval').value)}); scheduleLocalNags(true); };
 $('lnagTest').onclick = async () => {
@@ -1227,18 +1290,46 @@ $('lnagTest').onclick = async () => {
 };
 $('lnagExact').onclick = async () => { try { await NP.LocalNotifications.changeExactNotificationSetting(); } catch (e) { toast('לא נתמך במכשיר זה'); } };
 
-// new APK available? (GitHub release)
+// new APK available? (GitHub release) – banner always, dialog at most every 6 hours per version
+const vcmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
 async function checkAppUpdate() {
   if (!NATIVE) return;
   try {
-    const r = await fetch(`https://api.github.com/repos/${REPO.owner}/${REPO.repo}/releases/latest`, {headers: {Accept: 'application/vnd.github+json'}});
+    const r = await fetch(`https://api.github.com/repos/${REPO.owner}/${REPO.repo}/releases/latest`, {headers: {Accept: 'application/vnd.github+json'}, cache: 'no-store'});
     if (!r.ok) return;
     const j = await r.json(), v = String(j.tag_name || '').replace(/^v/, '');
-    const cmp = (a, b) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0); return 0; };
     const apk = (j.assets || []).find(a => a.name.endsWith('.apk'));
-    if (v && apk && cmp(v, VERSION) > 0) {
-      $('updBanner').innerHTML = `<div class="banner">⬆️ גרסה חדשה ${esc(v)} זמינה. <a href="${apk.browser_download_url}">הורדה והתקנה</a></div>`;
+    if (!(v && apk && vcmp(v, VERSION) > 0)) { $('updBanner').innerHTML = ''; return; }
+    const go = () => { location.href = apk.browser_download_url; };
+    $('updBanner').innerHTML = `<div class="banner" style="background:#e8f1fb;border-color:#9cc3ea;color:#123a5e">⬆️ <b>גרסה חדשה ${esc(v)} זמינה</b> (מותקנת ${VERSION}). <a href="#" id="updGo">הורדה והתקנה</a></div>`;
+    $('updGo').onclick = ev => { ev.preventDefault(); go(); };
+    const key = 'upd:' + v, last = Number(S[key] || 0);
+    if (Date.now() - last > 6 * 3600e3) {
+      S[key] = Date.now(); saveSettingsObj();
+      const notes = String(j.body || '').split(/\r?\n/).map(l => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
+      infoDialog(`גרסה חדשה ${v} זמינה`, notes, 'עדכון עכשיו', go);
     }
+  } catch {}
+}
+function infoDialog(title, lines, okText, onOk) {
+  $('infoTitle').textContent = title;
+  $('infoBody').innerHTML = lines.length ? `<ul style="padding-inline-start:18px;margin:0;line-height:1.6">${lines.map(l => `<li>${esc(l)}</li>`).join('')}</ul>` : '';
+  $('infoOk').textContent = okText || 'הבנתי';
+  $('infoLater').classList.toggle('hidden', !onOk);
+  $('infoOk').onclick = () => { $('infoDlg').classList.remove('on'); if (onOk) onOk(); };
+  $('infoLater').onclick = () => $('infoDlg').classList.remove('on');
+  $('infoDlg').classList.add('on');
+}
+// after an update: show what's new once
+async function whatsNew() {
+  const seen = S.seenVersion;
+  if (seen === VERSION) return;
+  const existingUser = !!(S.name || EXP.length);
+  S.seenVersion = VERSION; await saveSettingsObj();
+  if (!seen && !existingUser) return; // fresh install
+  try {
+    const w = await (await fetch('whatsnew.json', {cache: 'no-store'})).json();
+    if (w.version === VERSION) infoDialog(`עודכן לגרסה ${VERSION} – מה חדש`, w.notes || []);
   } catch {}
 }
 
@@ -1251,6 +1342,7 @@ async function checkAppUpdate() {
     renderExpenses();
     if (S.nag?.on) syncNag(true);
     if (NATIVE) { scheduleLocalNags(); checkAppUpdate(); }
+    setTimeout(whatsNew, 600);
     if (location.hash === '#report') { history.replaceState(history.state, '', location.pathname); goTab('report'); }
     if (!S.name) setTimeout(() => toast('ברוך הבא! התחל בהגדרות: שם, מייל הנה"ח וחתימה', 4500), 400);
   } catch (err) { console.error(err); document.body.insertAdjacentHTML('afterbegin', `<div class="banner">שגיאה בטעינת האחסון: ${esc(err.message)}</div>`); }
